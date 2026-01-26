@@ -3,6 +3,7 @@ var router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const multer = require('multer');
+const mongoose = require('mongoose');
 const { uploadToS3, uploadBase64ToS3 } = require('../utilities/s3Upload');
 
 // Configure multer for memory storage (we'll upload directly to S3)
@@ -60,14 +61,37 @@ router.post('/signup', async (req, res) => {
   try {
     let { MobileNumber, Password, DeviceId, ReferralCode } = req.body
     
+    // Validate required fields
     if (!MobileNumber || !Password) {
       return res.status(400).json({
         message: "MobileNumber and Password are required"
       })
     }
 
+    // Validate MobileNumber format (basic validation)
+    if (typeof MobileNumber !== 'string' || MobileNumber.trim().length === 0) {
+      return res.status(400).json({
+        message: "MobileNumber must be a valid string"
+      })
+    }
+
+    // Validate Password strength (minimum length)
+    if (typeof Password !== 'string' || Password.length < 6) {
+      return res.status(400).json({
+        message: "Password must be at least 6 characters long"
+      })
+    }
+
+    // Check database connection
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Signup Error: Database not connected');
+      return res.status(500).json({
+        message: "Database connection error. Please try again later."
+      })
+    }
+
     // Check if mobile number already exists
-    let checkMobile = await userModel.findOne({ MobileNumber: MobileNumber })
+    let checkMobile = await userModel.findOne({ MobileNumber: MobileNumber.trim() })
     if (checkMobile) {
       return res.status(400).json({
         message: "User with this MobileNumber already exists"
@@ -76,30 +100,68 @@ router.post('/signup', async (req, res) => {
 
     // Hash password
     const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(Password, saltRounds);
+    let hashedPassword;
+    try {
+      hashedPassword = await bcrypt.hash(Password, saltRounds);
+    } catch (hashError) {
+      console.error('Signup Error - Password hashing failed:', hashError);
+      return res.status(500).json({
+        message: "Failed to process password. Please try again."
+      })
+    }
 
     // Validate referral code if provided
     let referredBy = null;
     let referrer = null;
     if (ReferralCode) {
-      referrer = await userModel.findOne({ ReferCode: ReferralCode })
-      if (!referrer) {
+      if (typeof ReferralCode !== 'string' || ReferralCode.trim().length === 0) {
         return res.status(400).json({
-          message: "Invalid Referral Code"
+          message: "Invalid Referral Code format"
         })
       }
-      referredBy = ReferralCode;
+      try {
+        referrer = await userModel.findOne({ ReferCode: ReferralCode.trim() })
+        if (!referrer) {
+          return res.status(400).json({
+            message: "Invalid Referral Code"
+          })
+        }
+        referredBy = ReferralCode.trim();
+      } catch (referralError) {
+        console.error('Signup Error - Referral code validation failed:', referralError);
+        return res.status(500).json({
+          message: "Failed to validate referral code. Please try again."
+        })
+      }
     }
 
-    // Generate unique referCode
+    // Generate unique referCode with retry limit to prevent infinite loop
     let referCode;
     let isUnique = false;
-    while (!isUnique) {
+    let attempts = 0;
+    const maxAttempts = 50; // Prevent infinite loop
+    
+    while (!isUnique && attempts < maxAttempts) {
       referCode = generateReferCode();
-      let checkReferCode = await userModel.findOne({ ReferCode: referCode })
-      if (!checkReferCode) {
-        isUnique = true;
+      try {
+        let checkReferCode = await userModel.findOne({ ReferCode: referCode })
+        if (!checkReferCode) {
+          isUnique = true;
+        }
+      } catch (checkError) {
+        console.error('Signup Error - Refer code check failed:', checkError);
+        return res.status(500).json({
+          message: "Failed to generate referral code. Please try again."
+        })
       }
+      attempts++;
+    }
+
+    if (!isUnique) {
+      console.error('Signup Error: Failed to generate unique refer code after', maxAttempts, 'attempts');
+      return res.status(500).json({
+        message: "Failed to generate unique referral code. Please try again."
+      })
     }
 
     // Get referral settings
@@ -108,14 +170,29 @@ router.post('/signup', async (req, res) => {
       referralSettings = await referralSettingsModel.findOne()
       if (!referralSettings) {
         // Create default settings if not exists
-        referralSettings = await referralSettingsModel.create({
-          RewardForNewUser: 0,
-          RewardForReferrer: 0,
-          RewardType: 'Coins'
-        })
+        try {
+          referralSettings = await referralSettingsModel.create({
+            RewardForNewUser: 0,
+            RewardForReferrer: 0,
+            RewardType: 'Coins'
+          })
+        } catch (createError) {
+          // If create fails (e.g., duplicate key), try to find again
+          console.warn('Signup Warning - Failed to create referral settings, trying to find again:', createError.message);
+          referralSettings = await referralSettingsModel.findOne()
+          if (!referralSettings) {
+            // Use default values if still not found
+            referralSettings = {
+              RewardForNewUser: 0,
+              RewardForReferrer: 0,
+              RewardType: 'Coins'
+            }
+          }
+        }
       }
     } catch (settingsError) {
       // If settings fetch/create fails, use default values
+      console.warn('Signup Warning - Failed to fetch referral settings, using defaults:', settingsError.message);
       referralSettings = {
         RewardForNewUser: 0,
         RewardForReferrer: 0,
@@ -135,15 +212,45 @@ router.post('/signup', async (req, res) => {
     }
 
     // Create user
-    let User_data = await userModel.create({
-      MobileNumber: MobileNumber,
-      Password: hashedPassword,
-      DeviceId: DeviceId || null,
-      ReferCode: referCode,
-      ReferredBy: referredBy,
-      Coins: initialCoins,
-      WalletBalance: initialWalletBalance
-    })
+    let User_data;
+    try {
+      User_data = await userModel.create({
+        MobileNumber: MobileNumber.trim(),
+        Password: hashedPassword,
+        DeviceId: DeviceId ? DeviceId.trim() : null,
+        ReferCode: referCode,
+        ReferredBy: referredBy,
+        Coins: initialCoins,
+        WalletBalance: initialWalletBalance
+      })
+    } catch (createError) {
+      console.error('Signup Error - User creation failed:', createError);
+      
+      // Handle duplicate key errors
+      if (createError.code === 11000) {
+        const field = Object.keys(createError.keyPattern)[0];
+        if (field === 'MobileNumber') {
+          return res.status(400).json({
+            message: "User with this MobileNumber already exists"
+          })
+        } else if (field === 'ReferCode') {
+          // Retry with new refer code (shouldn't happen, but handle it)
+          return res.status(500).json({
+            message: "Failed to create user. Please try again."
+          })
+        }
+      }
+      
+      // Handle validation errors
+      if (createError.name === 'ValidationError') {
+        const errors = Object.values(createError.errors).map(err => err.message).join(', ');
+        return res.status(400).json({
+          message: "Validation error: " + errors
+        })
+      }
+      
+      throw createError; // Re-throw to be caught by outer catch
+    }
 
     // Give reward to referrer if referral code was used
     if (referrer && referralSettings && referralSettings.RewardForReferrer > 0) {
@@ -182,9 +289,23 @@ router.post('/signup', async (req, res) => {
 
   } catch (err) {
     console.error('Signup Error:', err);
+    console.error('Signup Error Stack:', err.stack);
+    console.error('Signup Error Details:', {
+      name: err.name,
+      message: err.message,
+      code: err.code,
+      keyPattern: err.keyPattern,
+      errors: err.errors
+    });
+    
+    // Don't expose internal error details in production
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? "Internal Server Error. Please try again later." 
+      : err.message;
+    
     return res.status(500).json({
       message: "Internal Server Error",
-      error: err.message
+      error: errorMessage
     })
   }
 })

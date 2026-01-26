@@ -3,16 +3,16 @@ let mongoose = require('mongoose')
 let schema = new mongoose.Schema({
     MobileNumber: {
         type: String,
-        require: true,
+        required: true,
         unique: true
     },
     Password: {
         type: String,
-        require: true
+        required: true
     },
     DeviceId: {
         type: String,
-        require: false,
+        required: false,
         unique: false
     },
     ReferCode: {

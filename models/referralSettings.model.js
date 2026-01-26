@@ -4,12 +4,12 @@ let schema = new mongoose.Schema({
     RewardForNewUser: {
         type: Number,
         default: 0,
-        require: true
+        required: true
     },
     RewardForReferrer: {
         type: Number,
         default: 0,
-        require: true
+        required: true
     },
     RewardType: {
         type: String,
