@@ -452,6 +452,81 @@ router.get('/wallet', verifyToken, async (req, res) => {
   }
 })
 
+// Add Coins to User Wallet API
+router.post('/addcoins', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { Coins } = req.body
+    
+    // Validate required fields
+    if (Coins === undefined || Coins === null) {
+      return res.status(400).json({
+        message: "Coins is required"
+      })
+    }
+
+    // Validate coins value
+    if (typeof Coins !== 'number' || isNaN(Coins)) {
+      return res.status(400).json({
+        message: "Coins must be a valid number"
+      })
+    }
+
+    if (Coins <= 0) {
+      return res.status(400).json({
+        message: "Coins must be greater than 0"
+      })
+    }
+
+    // Check database connection
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Add Coins Error: Database not connected');
+      return res.status(500).json({
+        message: "Database connection error. Please try again later."
+      })
+    }
+
+    // Find user
+    let user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    // Get current coins balance
+    const currentCoins = user.Coins || 0
+    
+    // Add coins to user's wallet
+    user.Coins = currentCoins + Coins
+    await user.save()
+
+    // Refresh user data to get latest values
+    user = await userModel.findById(userId)
+
+    return res.json({
+      message: "Coins added successfully",
+      data: {
+        coinsAdded: Coins,
+        previousCoins: currentCoins,
+        currentCoins: user.Coins || 0,
+        walletBalance: user.WalletBalance || 0,
+        MobileNumber: user.MobileNumber
+      }
+    })
+
+  } catch (err) {
+    console.error('Add Coins Error:', err);
+    console.error('Add Coins Error Stack:', err.stack);
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: process.env.NODE_ENV === 'production' 
+        ? "Failed to add coins. Please try again later." 
+        : err.message
+    })
+  }
+})
+
 // Get User Refer Code API
 router.get('/refercode', verifyToken, async (req, res) => {
   try {
