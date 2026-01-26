@@ -13,6 +13,7 @@ let appInstallationSubmissionModel = require('../models/appInstallationSubmissio
 let coinConversionSettingsModel = require('../models/coinConversionSettings.model')
 let scratchCardSettingsModel = require('../models/scratchCardSettings.model')
 let scratchCardClaimModel = require('../models/scratchCardClaim.model')
+let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
 
 // Admin Signup API
 router.post('/signup', async (req, res) => {
@@ -1285,6 +1286,81 @@ router.get('/scratchcard/settings', verifyToken, async (req, res) => {
 
   } catch (err) {
     console.error('Get Scratch Card Settings - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== WITHDRAWAL SETTINGS APIs ====================
+
+// Set Withdrawal Threshold API
+router.post('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
+  try {
+    const { MinimumWithdrawalAmount } = req.body
+    
+    if (MinimumWithdrawalAmount === undefined || MinimumWithdrawalAmount === null) {
+      return res.status(400).json({
+        message: "MinimumWithdrawalAmount is required"
+      })
+    }
+
+    if (typeof MinimumWithdrawalAmount !== 'number' || isNaN(MinimumWithdrawalAmount)) {
+      return res.status(400).json({
+        message: "MinimumWithdrawalAmount must be a valid number"
+      })
+    }
+
+    if (MinimumWithdrawalAmount < 1) {
+      return res.status(400).json({
+        message: "MinimumWithdrawalAmount must be at least 1"
+      })
+    }
+
+    // Update or create settings
+    let settings = await withdrawalSettingsModel.findOne()
+    if (settings) {
+      settings.MinimumWithdrawalAmount = MinimumWithdrawalAmount
+      await settings.save()
+    } else {
+      settings = await withdrawalSettingsModel.create({
+        MinimumWithdrawalAmount: MinimumWithdrawalAmount
+      })
+    }
+
+    return res.json({
+      message: "Withdrawal threshold updated successfully",
+      data: {
+        MinimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
+        updatedAt: settings.updatedAt
+      }
+    })
+
+  } catch (err) {
+    console.error('Set Withdrawal Threshold - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get Withdrawal Threshold API
+router.get('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
+  try {
+    let settings = await withdrawalSettingsModel.getSettings()
+
+    return res.json({
+      message: "Withdrawal threshold retrieved successfully",
+      data: {
+        MinimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
+        updatedAt: settings.updatedAt
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Withdrawal Threshold - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message

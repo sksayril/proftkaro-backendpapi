@@ -323,7 +323,109 @@ Content-Type: application/json
 
 ---
 
-## 5. Get User Refer Code
+## 5. Add Coins to User Wallet
+
+Add coins to the authenticated user's wallet.
+
+### Endpoint
+```
+POST /users/addcoins
+```
+
+### Request Headers
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+### Request Body
+```json
+{
+  "Coins": 100
+}
+```
+
+**Note:** 
+- `Coins` is **required** and must be a positive number greater than 0
+- The coins will be added to the user's current coin balance
+- User must be authenticated with a valid JWT token
+
+### Success Response (200 OK)
+```json
+{
+  "message": "Coins added successfully",
+  "data": {
+    "coinsAdded": 100,
+    "previousCoins": 50,
+    "currentCoins": 150,
+    "walletBalance": 500.50,
+    "MobileNumber": "9876543210"
+  }
+}
+```
+
+**Note:** 
+- `coinsAdded` shows the amount of coins that were added
+- `previousCoins` shows the coin balance before adding
+- `currentCoins` shows the updated coin balance after adding
+- `walletBalance` shows the current wallet balance (unchanged)
+- `MobileNumber` shows the user's mobile number
+
+### Error Responses
+
+#### 400 Bad Request - Missing Coins
+```json
+{
+  "message": "Coins is required"
+}
+```
+
+#### 400 Bad Request - Invalid Coins Value
+```json
+{
+  "message": "Coins must be a valid number"
+}
+```
+
+#### 400 Bad Request - Invalid Coins Amount
+```json
+{
+  "message": "Coins must be greater than 0"
+}
+```
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 401 Unauthorized - Invalid Token
+```json
+{
+  "message": "Invalid or expired token"
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User Not Found"
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+---
+
+## 6. Get User Refer Code
 
 Retrieve the refer code for the authenticated user.
 
@@ -447,7 +549,7 @@ Content-Type: application/json
 
 ---
 
-## 6. Solve Captcha
+## 8. Solve Captcha
 
 Solve a captcha and earn rewards (Coins or WalletBalance).
 
@@ -880,7 +982,7 @@ fetch('http://localhost:3100/protected-route', {
 
 ---
 
-## 7. Get All Daily Bonuses
+## 9. Get All Daily Bonuses
 
 Retrieve all daily bonuses with claim status for the current week.
 
@@ -995,7 +1097,7 @@ Content-Type: application/json
 
 ---
 
-## 8. Claim Daily Bonus
+## 10. Claim Daily Bonus
 
 Claim the daily bonus for the current day.
 
@@ -1088,6 +1190,70 @@ Content-Type: application/json
 
 ## Withdrawal Request APIs
 
+### GET /users/withdrawal/threshold
+Get the minimum withdrawal amount threshold and check if user can withdraw.
+
+**Endpoint:**
+```
+GET /users/withdrawal/threshold
+```
+
+### Request Headers
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+### Success Response (200 OK)
+```json
+{
+  "message": "Withdrawal threshold retrieved successfully",
+  "data": {
+    "minimumWithdrawalAmount": 500,
+    "currentWalletBalance": 300,
+    "canWithdraw": false
+  }
+}
+```
+
+**Note:** 
+- `minimumWithdrawalAmount`: The minimum amount required to make a withdrawal (set by admin)
+- `currentWalletBalance`: User's current wallet balance
+- `canWithdraw`: Boolean indicating if user has enough balance to withdraw (balance >= minimum)
+
+### Error Responses
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 401 Unauthorized - Invalid Token
+```json
+{
+  "message": "Invalid or expired token"
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User Not Found"
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+---
+
 ### POST /users/withdrawal/request
 Submit a withdrawal request.
 
@@ -1136,6 +1302,13 @@ OR for Bank Transfer:
 **Response (Error - 400):**
 ```json
 {
+  "message": "Minimum withdrawal amount is 500. You requested 100"
+}
+```
+
+**Response (Error - 400):**
+```json
+{
   "message": "Insufficient wallet balance. Available: 50, Requested: 100"
 }
 ```
@@ -1149,11 +1322,13 @@ OR for Bank Transfer:
 
 **Validation Rules:**
 - Amount must be greater than 0
+- Amount must meet the minimum withdrawal threshold (set by admin)
 - Wallet balance must be sufficient
 - Only one pending request allowed at a time
 - For UPI: UPIId or VirtualId is required
 - For Bank Transfer: BankAccountNumber, BankIFSC, BankName, and AccountHolderName are required
 - Amount is deducted from wallet immediately when request is submitted
+- Use `/users/withdrawal/threshold` endpoint to check minimum withdrawal amount before submitting request
 
 ---
 

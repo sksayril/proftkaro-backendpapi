@@ -1412,6 +1412,98 @@ Authorization: Bearer <JWT_TOKEN>
 
 ---
 
+## Withdrawal Settings APIs
+
+### POST /admin/withdrawal/threshold
+Set the minimum withdrawal amount threshold.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "MinimumWithdrawalAmount": 500
+}
+```
+
+**Note:**
+- `MinimumWithdrawalAmount`: The minimum amount users must have in their wallet to make a withdrawal request (must be >= 1)
+- This threshold is enforced when users submit withdrawal requests
+- Users cannot withdraw amounts below this threshold
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Withdrawal threshold updated successfully",
+  "data": {
+    "MinimumWithdrawalAmount": 500,
+    "updatedAt": "2024-01-18T20:00:00.000Z"
+  }
+}
+```
+
+**Error Responses:**
+
+#### 400 Bad Request - Missing Field
+```json
+{
+  "message": "MinimumWithdrawalAmount is required"
+}
+```
+
+#### 400 Bad Request - Invalid Value
+```json
+{
+  "message": "MinimumWithdrawalAmount must be a valid number"
+}
+```
+
+#### 400 Bad Request - Invalid Amount
+```json
+{
+  "message": "MinimumWithdrawalAmount must be at least 1"
+}
+```
+
+---
+
+### GET /admin/withdrawal/threshold
+Get the current minimum withdrawal amount threshold.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Withdrawal threshold retrieved successfully",
+  "data": {
+    "MinimumWithdrawalAmount": 500,
+    "updatedAt": "2024-01-18T20:00:00.000Z"
+  }
+}
+```
+
+**Note:** If no settings exist, default value will be created (MinimumWithdrawalAmount: 100)
+
+---
+
+## Notes for Withdrawal Settings System
+
+- Withdrawal settings APIs require JWT token authentication
+- Admin can set the minimum withdrawal amount that users must meet
+- This threshold is enforced when users submit withdrawal requests
+- Users will receive an error if they try to withdraw less than the minimum amount
+- Default minimum withdrawal amount is 100 if not set by admin
+
+---
+
 ## App Installation Reward Management APIs
 
 ### POST /admin/apps

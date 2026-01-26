@@ -35,6 +35,7 @@ let appInstallationSubmissionModel = require('../models/appInstallationSubmissio
 let coinConversionSettingsModel = require('../models/coinConversionSettings.model')
 let scratchCardSettingsModel = require('../models/scratchCardSettings.model')
 let scratchCardClaimModel = require('../models/scratchCardClaim.model')
+let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
 
 // Function to generate unique referCode (format: PRK08F9 - 3 letters + 2 digits + 1 letter)
 function generateReferCode() {
@@ -1114,6 +1115,39 @@ router.post('/dailybonus/claim', verifyToken, async (req, res) => {
   }
 })
 
+// Get Withdrawal Threshold API
+router.get('/withdrawal/threshold', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    
+    let user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    // Get withdrawal settings
+    let settings = await withdrawalSettingsModel.getSettings()
+
+    return res.json({
+      message: "Withdrawal threshold retrieved successfully",
+      data: {
+        minimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
+        currentWalletBalance: user.WalletBalance || 0,
+        canWithdraw: (user.WalletBalance || 0) >= settings.MinimumWithdrawalAmount
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Withdrawal Threshold - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
 // Submit Withdrawal Request API
 router.post('/withdrawal/request', verifyToken, async (req, res) => {
   try {
@@ -1138,6 +1172,16 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
     if (!PaymentMethod || !['UPI', 'BankTransfer'].includes(PaymentMethod)) {
       return res.status(400).json({
         message: "PaymentMethod is required and must be either 'UPI' or 'BankTransfer'"
+      })
+    }
+
+    // Get withdrawal settings and validate minimum withdrawal amount
+    let withdrawalSettings = await withdrawalSettingsModel.getSettings()
+    const minimumWithdrawalAmount = withdrawalSettings.MinimumWithdrawalAmount || 100
+    
+    if (Amount < minimumWithdrawalAmount) {
+      return res.status(400).json({
+        message: `Minimum withdrawal amount is ${minimumWithdrawalAmount}. You requested ${Amount}`
       })
     }
 
