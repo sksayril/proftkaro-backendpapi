@@ -1368,4 +1368,178 @@ router.get('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
   }
 })
 
+// ==================== ADMIN DASHBOARD API ====================
+
+// Get Admin Dashboard Statistics API
+router.get('/dashboard', verifyAdminToken, async (req, res) => {
+  try {
+    const { days = 30 } = req.query // Default to last 30 days for registration chart
+    
+    // 1. Total Users Count
+    const totalUsers = await userModel.countDocuments()
+
+    // 2. Total Wallet Balance (sum of all users' wallet balances)
+    const totalWalletBalanceResult = await userModel.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalWalletBalance: { $sum: { $ifNull: ['$WalletBalance', 0] } }
+        }
+      }
+    ])
+    const totalWalletBalance = totalWalletBalanceResult[0]?.totalWalletBalance || 0
+
+    // 3. Total Coins (sum of all users' coins)
+    const totalCoinsResult = await userModel.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalCoins: { $sum: { $ifNull: ['$Coins', 0] } }
+        }
+      }
+    ])
+    const totalCoins = totalCoinsResult[0]?.totalCoins || 0
+
+    // 4. Day-wise User Registration Chart (last N days)
+    const daysNum = parseInt(days) || 30
+    const startDate = new Date()
+    startDate.setDate(startDate.getDate() - daysNum)
+    startDate.setHours(0, 0, 0, 0)
+
+    // Get day-wise registration data
+    const registrationData = await userModel.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: startDate }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' },
+            day: { $dayOfMonth: '$createdAt' }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
+      }
+    ])
+
+    // Format registration chart data
+    const registrationChart = registrationData.map(item => ({
+      date: `${item._id.year}-${String(item._id.month).padStart(2, '0')}-${String(item._id.day).padStart(2, '0')}`,
+      registrations: item.count
+    }))
+
+    // Fill in missing days with 0 registrations
+    const chartData = []
+    const today = new Date()
+    for (let i = daysNum - 1; i >= 0; i--) {
+      const date = new Date(today)
+      date.setDate(date.getDate() - i)
+      date.setHours(0, 0, 0, 0)
+      
+      const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+      const existingData = registrationChart.find(item => item.date === dateStr)
+      
+      chartData.push({
+        date: dateStr,
+        registrations: existingData ? existingData.registrations : 0
+      })
+    }
+
+    // 5. Total Withdrawals Amount (sum of all approved withdrawals)
+    const totalWithdrawalsResult = await withdrawalRequestModel.aggregate([
+      {
+        $match: {
+          Status: 'Approved'
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalWithdrawals: { $sum: '$Amount' }
+        }
+      }
+    ])
+    const totalWithdrawals = totalWithdrawalsResult[0]?.totalWithdrawals || 0
+
+    // 6. Withdrawal Statistics
+    const withdrawalStats = await withdrawalRequestModel.aggregate([
+      {
+        $group: {
+          _id: '$Status',
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$Amount' }
+        }
+      }
+    ])
+
+    const withdrawalStatistics = {
+      pending: { count: 0, totalAmount: 0 },
+      approved: { count: 0, totalAmount: 0 },
+      rejected: { count: 0, totalAmount: 0 }
+    }
+
+    withdrawalStats.forEach(stat => {
+      if (stat._id === 'Pending') {
+        withdrawalStatistics.pending = { count: stat.count, totalAmount: stat.totalAmount }
+      } else if (stat._id === 'Approved') {
+        withdrawalStatistics.approved = { count: stat.count, totalAmount: stat.totalAmount }
+      } else if (stat._id === 'Rejected') {
+        withdrawalStatistics.rejected = { count: stat.count, totalAmount: stat.totalAmount }
+      }
+    })
+
+    // 7. Recent registrations (last 7 days)
+    const sevenDaysAgo = new Date()
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+    sevenDaysAgo.setHours(0, 0, 0, 0)
+    const recentRegistrations = await userModel.countDocuments({
+      createdAt: { $gte: sevenDaysAgo }
+    })
+
+    // 8. Today's registrations
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const todayRegistrations = await userModel.countDocuments({
+      createdAt: { $gte: todayStart }
+    })
+
+    return res.json({
+      message: "Dashboard statistics retrieved successfully",
+      data: {
+        users: {
+          totalUsers: totalUsers,
+          todayRegistrations: todayRegistrations,
+          recentRegistrations: recentRegistrations // Last 7 days
+        },
+        wallet: {
+          totalWalletBalance: totalWalletBalance,
+          totalCoins: totalCoins
+        },
+        withdrawals: {
+          totalWithdrawals: totalWithdrawals, // Total approved withdrawals amount
+          statistics: withdrawalStatistics
+        },
+        registrationChart: {
+          days: daysNum,
+          data: chartData
+        }
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Dashboard Statistics - Error:', err)
+    console.error('Get Dashboard Statistics - Error Stack:', err.stack)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
 module.exports = router;

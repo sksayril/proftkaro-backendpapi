@@ -1504,6 +1504,132 @@ Authorization: Bearer <JWT_TOKEN>
 
 ---
 
+## Admin Dashboard API
+
+### GET /admin/dashboard
+Get comprehensive dashboard statistics including total users, wallet balances, registration charts, and withdrawal statistics.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Query Parameters:**
+- `days` (optional): Number of days for registration chart (default: 30, max recommended: 365)
+
+**Example:**
+```
+GET /admin/dashboard?days=30
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Dashboard statistics retrieved successfully",
+  "data": {
+    "users": {
+      "totalUsers": 1250,
+      "todayRegistrations": 15,
+      "recentRegistrations": 85
+    },
+    "wallet": {
+      "totalWalletBalance": 125000.50,
+      "totalCoins": 500000
+    },
+    "withdrawals": {
+      "totalWithdrawals": 50000.00,
+      "statistics": {
+        "pending": {
+          "count": 25,
+          "totalAmount": 12500.00
+        },
+        "approved": {
+          "count": 150,
+          "totalAmount": 50000.00
+        },
+        "rejected": {
+          "count": 10,
+          "totalAmount": 3000.00
+        }
+      }
+    },
+    "registrationChart": {
+      "days": 30,
+      "data": [
+        {
+          "date": "2024-01-01",
+          "registrations": 5
+        },
+        {
+          "date": "2024-01-02",
+          "registrations": 8
+        },
+        {
+          "date": "2024-01-03",
+          "registrations": 12
+        }
+      ]
+    }
+  }
+}
+```
+
+**Response Fields:**
+
+**Users Section:**
+- `totalUsers`: Total number of registered users
+- `todayRegistrations`: Number of users registered today
+- `recentRegistrations`: Number of users registered in the last 7 days
+
+**Wallet Section:**
+- `totalWalletBalance`: Sum of all users' wallet balances
+- `totalCoins`: Sum of all users' coins
+
+**Withdrawals Section:**
+- `totalWithdrawals`: Total amount of all approved withdrawals
+- `statistics.pending`: Count and total amount of pending withdrawals
+- `statistics.approved`: Count and total amount of approved withdrawals
+- `statistics.rejected`: Count and total amount of rejected withdrawals
+
+**Registration Chart Section:**
+- `days`: Number of days included in the chart
+- `data`: Array of daily registration counts
+  - `date`: Date in YYYY-MM-DD format
+  - `registrations`: Number of users registered on that date
+
+**Error Responses:**
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 401 Unauthorized - Invalid Token
+```json
+{
+  "message": "Invalid or expired token"
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+**Notes:**
+- Dashboard API requires JWT token authentication
+- Registration chart data includes all days in the specified range, with 0 for days with no registrations
+- Total withdrawals amount only includes approved withdrawals
+- All amounts are in the same currency as wallet balance
+- The chart data is sorted chronologically from oldest to newest
+
+---
+
 ## App Installation Reward Management APIs
 
 ### POST /admin/apps
