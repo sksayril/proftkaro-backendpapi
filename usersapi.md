@@ -24,21 +24,12 @@ POST /users/signup
 ```json
 {
   "MobileNumber": "9876543210",
-  "Password": "yourpassword123"
+  "Password": "yourpassword123",
+  "DeviceId": "device123456"
 }
 ```
 
 **With Optional Referral Code:**
-```json
-{
-  "MobileNumber": "9876543210",
-  "Password": "yourpassword123",
-  "ReferralCode": "PRK08F9"
-}
-```
-
-
-**With Optional DeviceId:**
 ```json
 {
   "MobileNumber": "9876543210",
@@ -49,9 +40,12 @@ POST /users/signup
 ```
 
 **Note:** 
-- `MobileNumber` and `Password` are **required** fields.
-- `DeviceId` is **optional**.
+- `MobileNumber`, `Password`, and `DeviceId` are **required** fields.
+- `DeviceId` must be unique - each device can only be registered to one account.
+- If a `DeviceId` is already registered, signup will be rejected.
 - `ReferralCode` is **optional**. If provided, it must be a valid referral code from another existing user.
+- **Referral code is permanent**: Once a referral code is set during signup, it cannot be removed or changed. If no referral code is provided during signup, `ReferredBy` will be `null` and cannot be set later.
+- `SignupTime` is automatically recorded when the user signs up.
 
 ### Request Headers
 ```
@@ -70,6 +64,7 @@ Content-Type: application/json
     "ReferredBy": "ABC12X",
     "Coins": 0,
     "WalletBalance": 0,
+    "SignupTime": "2024-01-18T20:00:00.000Z",
     "__v": 0
   },
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjUwN2YxZjc3YmNmODZjZDc5OTQzOTAxMSIsIk1vYmlsZU51bWJlciI6Ijk4NzY1NDMyMTAiLCJpYXQiOjE2ODk1MjM0NTYsImV4cCI6MTY5MjExNTQ1Nn0.example"
@@ -80,7 +75,10 @@ Content-Type: application/json
 - The JWT token is valid for 30 days from the time of generation.
 - A unique ReferCode is automatically generated for each user (format: 3 letters + 2 digits + 1 letter, e.g., "PRK08F9", "ABC12X").
 - Each user must have a unique MobileNumber and DeviceId.
+- `DeviceId` is required and must be unique - one device can only be registered to one account.
+- `SignupTime` is automatically recorded when the user signs up.
 - If a ReferralCode is provided during signup, it will be validated and stored in the `ReferredBy` field. If no referral code is provided, `ReferredBy` will be `null`.
+- **Referral code is permanent**: Once set during signup, the referral code (ReferredBy) cannot be removed or changed. This ensures referral tracking integrity.
 - **Referral Rewards**: If a valid referral code is used during signup, rewards are automatically calculated and distributed:
   - The new user receives `RewardForNewUser` (configured by admin)
   - The referrer (user whose code was used) receives `RewardForReferrer` (configured by admin)
@@ -99,6 +97,20 @@ Content-Type: application/json
 ```json
 {
   "message": "User with this MobileNumber already exists"
+}
+```
+
+#### 400 Bad Request - DeviceId Already Registered
+```json
+{
+  "message": "DeviceId already registered. This device is already associated with another account."
+}
+```
+
+#### 400 Bad Request - Missing DeviceId
+```json
+{
+  "message": "DeviceId is required"
 }
 ```
 
@@ -132,9 +144,16 @@ POST /users/login
 ```json
 {
   "MobileNumber": "9876543210",
-  "Password": "yourpassword123"
+  "Password": "yourpassword123",
+  "DeviceId": "device123456"
 }
 ```
+
+**Note:**
+- `MobileNumber`, `Password`, and `DeviceId` are **required** fields.
+- `DeviceId` must match the device ID that was used during signup.
+- Users can only login from their registered device.
+- `LastLoginTime` is automatically updated on successful login.
 
 ### Request Headers
 ```
@@ -149,13 +168,17 @@ Content-Type: application/json
     "MobileNumber": "9876543210",
     "DeviceId": "device123456",
     "ReferCode": "PRK08F9",
-    "_id": "507f1f77bcf86cd799439011"
+    "_id": "507f1f77bcf86cd799439011",
+    "LastLoginTime": "2024-01-18T22:00:00.000Z"
   },
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjUwN2YxZjc3YmNmODZjZDc5OTQzOTAxMSIsIk1vYmlsZU51bWJlciI6Ijk4NzY1NDMyMTAiLCJpYXQiOjE2ODk1MjM0NTYsImV4cCI6MTY5MjExNTQ1Nn0.example"
 }
 ```
 
-**Note:** The JWT token is valid for 30 days from the time of generation.
+**Note:** 
+- The JWT token is valid for 30 days from the time of generation.
+- `LastLoginTime` is automatically updated on successful login.
+- Users can only login from their registered device - DeviceId must match the one used during signup.
 
 ### Error Responses
 
@@ -166,10 +189,24 @@ Content-Type: application/json
 }
 ```
 
+#### 400 Bad Request - Missing DeviceId
+```json
+{
+  "message": "DeviceId is required"
+}
+```
+
 #### 401 Unauthorized - Invalid Password
 ```json
 {
   "message": "Invalid password"
+}
+```
+
+#### 403 Forbidden - Device ID Mismatch
+```json
+{
+  "message": "Device ID mismatch. You can only login from your registered device."
 }
 ```
 
@@ -218,6 +255,8 @@ Content-Type: application/json
     "coins": 100,
     "walletBalance": 500.50,
     "referredBy": null,
+    "signupTime": "2024-01-18T20:00:00.000Z",
+    "lastLoginTime": "2024-01-18T22:00:00.000Z",
     "createdAt": "2024-01-18T20:00:00.000Z",
     "updatedAt": "2024-01-18T20:00:00.000Z"
   }
@@ -228,6 +267,7 @@ Content-Type: application/json
 - Returns complete user profile information
 - Includes mobile number, device ID, referral code, coins, wallet balance
 - Shows if user was referred by someone (referredBy field)
+- Includes signup time (when user registered) and last login time (most recent login timestamp)
 - Includes account creation and update timestamps
 
 ### Error Responses
@@ -648,7 +688,8 @@ curl -X POST http://localhost:3100/users/signup \
   -H "Content-Type: application/json" \
   -d '{
     "MobileNumber": "9876543210",
-    "Password": "yourpassword123"
+    "Password": "yourpassword123",
+    "DeviceId": "device123456"
   }'
 ```
 
@@ -659,6 +700,7 @@ curl -X POST http://localhost:3100/users/signup \
   -d '{
     "MobileNumber": "9876543210",
     "Password": "yourpassword123",
+    "DeviceId": "device123456",
     "ReferralCode": "PRK08F9"
   }'
 ```
@@ -669,7 +711,8 @@ curl -X POST http://localhost:3100/users/login \
   -H "Content-Type: application/json" \
   -d '{
     "MobileNumber": "9876543210",
-    "Password": "yourpassword123"
+    "Password": "yourpassword123",
+    "DeviceId": "device123456"
   }'
 ```
 
@@ -729,7 +772,8 @@ fetch('http://localhost:3100/users/signup', {
   },
   body: JSON.stringify({
     MobileNumber: '9876543210',
-    Password: 'yourpassword123'
+    Password: 'yourpassword123',
+    DeviceId: 'device123456'
   })
 })
 .then(response => response.json())
@@ -751,6 +795,7 @@ fetch('http://localhost:3100/users/signup', {
   body: JSON.stringify({
     MobileNumber: '9876543210',
     Password: 'yourpassword123',
+    DeviceId: 'device123456',
     ReferralCode: 'PRK08F9'
   })
 })
@@ -773,7 +818,8 @@ fetch('http://localhost:3100/users/login', {
   },
   body: JSON.stringify({
     MobileNumber: '9876543210',
-    Password: 'yourpassword123'
+    Password: 'yourpassword123',
+    DeviceId: 'device123456'
   })
 })
 .then(response => response.json())
@@ -956,15 +1002,19 @@ fetch('http://localhost:3100/protected-route', {
 ### Required Fields
 - **MobileNumber**: User's mobile phone number (must be unique)
 - **Password**: User's password (will be hashed and stored securely)
+- **DeviceId**: Device identifier (required, must be unique - one device per user)
 
 ### Auto-Generated Fields
 - **ReferCode**: Automatically generated unique referral code (format: 3 letters + 2 digits + 1 letter)
   - Example: "PRK08F9", "ABC12X", "XYZ45M"
   - Each user gets a unique refer code upon signup
+- **SignupTime**: Automatically recorded timestamp when user signs up
+- **LastLoginTime**: Automatically updated timestamp on each successful login (initially null)
 
 ### Optional Fields
-- **DeviceId**: Device identifier (optional, not unique)
 - **ReferredBy**: Referral code used during signup (stored if a valid referral code is provided, otherwise null)
+  - **Permanent once set**: If a referral code is provided during signup, it cannot be removed or changed later
+  - If no referral code is provided during signup, this field remains `null` and cannot be set later
 
 ### Default Fields
 - **Coins**: User's coin balance (default: 0)
@@ -976,9 +1026,13 @@ fetch('http://localhost:3100/protected-route', {
 
 1. **MobileNumber Uniqueness**: Each mobile number can only be registered once. One mobile number = one user.
 2. **Password Security**: Passwords are hashed using bcrypt before storage. Never store plain text passwords.
-3. **DeviceId**: Optional field, not required and not unique. Can be provided during signup but is not mandatory.
-4. **ReferCode Uniqueness**: Each refer code is automatically generated and guaranteed to be unique.
-5. **Required Fields**: MobileNumber and Password are mandatory for signup.
+3. **DeviceId**: Required field, must be unique. Each device can only be registered to one account. Cannot signup with a DeviceId that is already registered.
+4. **DeviceId Login Restriction**: Users can only login from their registered device. DeviceId must match the one used during signup.
+5. **ReferCode Uniqueness**: Each refer code is automatically generated and guaranteed to be unique.
+6. **Required Fields**: MobileNumber, Password, and DeviceId are mandatory for signup.
+7. **Referral Code Permanence**: Referral code (ReferredBy) is optional during signup, but once set, it cannot be removed or changed. If not provided during signup, it remains null permanently.
+8. **SignupTime Tracking**: Automatically recorded when user signs up.
+9. **LastLoginTime Tracking**: Automatically updated on each successful login.
 
 ---
 
@@ -1394,9 +1448,12 @@ Authorization: Bearer <JWT_TOKEN>
 ## Notes
 
 - All endpoints require `Content-Type: application/json` header
-- MobileNumber and Password are required for login
-- MobileNumber and Password are required for signup
-- DeviceId is optional for signup (not required)
+- MobileNumber, Password, and DeviceId are required for login
+- MobileNumber, Password, and DeviceId are required for signup
+- DeviceId must be unique - one device can only be registered to one account
+- Users can only login from their registered device - DeviceId must match during login
+- SignupTime is automatically recorded when user signs up
+- LastLoginTime is automatically updated on each successful login
 - Passwords are securely hashed using bcrypt before storage
 - GET endpoints (`/users/wallet` and `/users/refercode`) require JWT token authentication
 - Include JWT token in `Authorization: Bearer <token>` header for protected routes

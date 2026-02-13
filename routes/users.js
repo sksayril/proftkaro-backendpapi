@@ -69,6 +69,13 @@ router.post('/signup', async (req, res) => {
       })
     }
 
+    // Validate DeviceId is required
+    if (!DeviceId || typeof DeviceId !== 'string' || DeviceId.trim().length === 0) {
+      return res.status(400).json({
+        message: "DeviceId is required"
+      })
+    }
+
     // Validate MobileNumber format (basic validation)
     if (typeof MobileNumber !== 'string' || MobileNumber.trim().length === 0) {
       return res.status(400).json({
@@ -96,6 +103,14 @@ router.post('/signup', async (req, res) => {
     if (checkMobile) {
       return res.status(400).json({
         message: "User with this MobileNumber already exists"
+      })
+    }
+
+    // Check if DeviceId already exists (one device per user)
+    let checkDevice = await userModel.findOne({ DeviceId: DeviceId.trim() })
+    if (checkDevice) {
+      return res.status(400).json({
+        message: "DeviceId already registered. This device is already associated with another account."
       })
     }
 
@@ -218,11 +233,12 @@ router.post('/signup', async (req, res) => {
       User_data = await userModel.create({
         MobileNumber: MobileNumber.trim(),
         Password: hashedPassword,
-        DeviceId: DeviceId ? DeviceId.trim() : null,
+        DeviceId: DeviceId.trim(),
         ReferCode: referCode,
         ReferredBy: referredBy,
         Coins: initialCoins,
-        WalletBalance: initialWalletBalance
+        WalletBalance: initialWalletBalance,
+        SignupTime: new Date()
       })
     } catch (createError) {
       console.error('Signup Error - User creation failed:', createError);
@@ -314,11 +330,18 @@ router.post('/signup', async (req, res) => {
 // User Login API
 router.post('/login', async (req, res) => {
   try {
-    let { MobileNumber, Password } = req.body
+    let { MobileNumber, Password, DeviceId } = req.body
     
     if (!MobileNumber || !Password) {
       return res.status(400).json({
         message: "MobileNumber and Password are required"
+      })
+    }
+
+    // Validate DeviceId is required
+    if (!DeviceId || typeof DeviceId !== 'string' || DeviceId.trim().length === 0) {
+      return res.status(400).json({
+        message: "DeviceId is required"
       })
     }
 
@@ -336,6 +359,17 @@ router.post('/login', async (req, res) => {
         message: "Invalid password"
       })
     }
+
+    // Verify DeviceId matches the user's registered device
+    if (user.DeviceId !== DeviceId.trim()) {
+      return res.status(403).json({
+        message: "Device ID mismatch. You can only login from your registered device."
+      })
+    }
+
+    // Update LastLoginTime
+    user.LastLoginTime = new Date()
+    await user.save()
 
     // Generate JWT token with 30 days expiration
     const token = jwt.sign(
@@ -355,7 +389,8 @@ router.post('/login', async (req, res) => {
         ReferCode: user.ReferCode,
         Coins: user.Coins || 0,
         WalletBalance: user.WalletBalance || 0,
-        _id: user._id
+        _id: user._id,
+        LastLoginTime: user.LastLoginTime
       },
       token: token
     })
@@ -411,6 +446,8 @@ router.get('/profile', verifyToken, async (req, res) => {
         coins: user.Coins || 0,
         walletBalance: user.WalletBalance || 0,
         referredBy: user.ReferredBy || null,
+        signupTime: user.SignupTime,
+        lastLoginTime: user.LastLoginTime,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
       }
