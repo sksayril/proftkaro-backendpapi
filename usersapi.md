@@ -169,7 +169,8 @@ Content-Type: application/json
     "DeviceId": "device123456",
     "ReferCode": "PRK08F9",
     "_id": "507f1f77bcf86cd799439011",
-    "LastLoginTime": "2024-01-18T22:00:00.000Z"
+    "LastLoginTime": "2024-01-18T22:00:00.000Z",
+    "isBlocked": false
   },
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjUwN2YxZjc3YmNmODZjZDc5OTQzOTAxMSIsIk1vYmlsZU51bWJlciI6Ijk4NzY1NDMyMTAiLCJpYXQiOjE2ODk1MjM0NTYsImV4cCI6MTY5MjExNTQ1Nn0.example"
 }
@@ -179,6 +180,8 @@ Content-Type: application/json
 - The JWT token is valid for 30 days from the time of generation.
 - `LastLoginTime` is automatically updated on successful login.
 - Users can only login from their registered device - DeviceId must match the one used during signup.
+- `isBlocked` field shows whether the user account is blocked (false = active, true = blocked).
+- **Blocked users cannot login** - if a user is blocked, login will be rejected with a 403 error.
 
 ### Error Responses
 
@@ -209,6 +212,21 @@ Content-Type: application/json
   "message": "Device ID mismatch. You can only login from your registered device."
 }
 ```
+
+#### 403 Forbidden - Account Blocked
+```json
+{
+  "message": "Your account has been blocked",
+  "isBlocked": true,
+  "blockedAt": "2024-01-18T22:30:00.000Z",
+  "blockedReason": "Violation of terms of service"
+}
+```
+
+**Note:** 
+- Blocked users cannot login to the system.
+- The response includes `blockedAt` timestamp and `blockedReason` (if provided by admin).
+- Contact administrator if you believe your account was blocked in error.
 
 #### 404 Not Found - User Not Found
 ```json
@@ -257,6 +275,9 @@ Content-Type: application/json
     "referredBy": null,
     "signupTime": "2024-01-18T20:00:00.000Z",
     "lastLoginTime": "2024-01-18T22:00:00.000Z",
+    "isBlocked": false,
+    "blockedAt": null,
+    "blockedReason": null,
     "createdAt": "2024-01-18T20:00:00.000Z",
     "updatedAt": "2024-01-18T20:00:00.000Z"
   }
@@ -269,6 +290,8 @@ Content-Type: application/json
 - Shows if user was referred by someone (referredBy field)
 - Includes signup time (when user registered) and last login time (most recent login timestamp)
 - Includes account creation and update timestamps
+- **Blocked Status**: Includes `isBlocked`, `blockedAt`, and `blockedReason` fields
+- **Blocked users cannot access any protected APIs** - all API requests will return 403 error if user is blocked
 
 ### Error Responses
 
@@ -363,13 +386,13 @@ Content-Type: application/json
 
 ---
 
-## 5. Add Coins to User Wallet
+## 5. Add Amount (RS) to Wallet Balance
 
-Add coins to the authenticated user's wallet.
+Add **RS amount** to the authenticated user's `WalletBalance`.
 
 ### Endpoint
 ```
-POST /users/addcoins
+POST /users/addwallet
 ```
 
 ### Request Headers
@@ -381,56 +404,49 @@ Content-Type: application/json
 ### Request Body
 ```json
 {
-  "Coins": 100
+  "Amount": 50
 }
 ```
 
 **Note:** 
-- `Coins` is **required** and must be a positive number greater than 0
-- The coins will be added to the user's current coin balance
+- `Amount` is **required** and must be a positive number greater than 0
+- This API adds RS directly to the user's `WalletBalance`
 - User must be authenticated with a valid JWT token
 
 ### Success Response (200 OK)
 ```json
 {
-  "message": "Coins added successfully",
+  "message": "Wallet balance added successfully",
   "data": {
-    "coinsAdded": 100,
-    "previousCoins": 50,
-    "currentCoins": 150,
-    "walletBalance": 500.50,
+    "amountAdded": 50,
+    "previousWalletBalance": 100,
+    "currentWalletBalance": 150,
+    "coins": 500,
     "MobileNumber": "9876543210"
   }
 }
 ```
 
-**Note:** 
-- `coinsAdded` shows the amount of coins that were added
-- `previousCoins` shows the coin balance before adding
-- `currentCoins` shows the updated coin balance after adding
-- `walletBalance` shows the current wallet balance (unchanged)
-- `MobileNumber` shows the user's mobile number
+**Error Responses**
 
-### Error Responses
-
-#### 400 Bad Request - Missing Coins
+#### 400 Bad Request - Missing Amount
 ```json
 {
-  "message": "Coins is required"
+  "message": "Amount is required"
 }
 ```
 
-#### 400 Bad Request - Invalid Coins Value
+#### 400 Bad Request - Invalid Amount
 ```json
 {
-  "message": "Coins must be a valid number"
+  "message": "Amount must be a valid number"
 }
 ```
 
-#### 400 Bad Request - Invalid Coins Amount
+#### 400 Bad Request - Amount <= 0
 ```json
 {
-  "message": "Coins must be greater than 0"
+  "message": "Amount must be greater than 0"
 }
 ```
 
@@ -1445,6 +1461,339 @@ Authorization: Bearer <JWT_TOKEN>
 
 ---
 
+## Daily Spin APIs
+
+### GET /users/dailyspin/status
+Get today's spin usage and remaining spins, plus lifetime total spins.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Daily spin status retrieved successfully",
+  "data": {
+    "dailySpinLimit": 20,
+    "spinsUsedToday": 5,
+    "spinsRemainingToday": 15,
+    "totalSpins": 120
+  }
+}
+```
+
+**Notes:**
+- `dailySpinLimit`: Admin configured daily limit (default: 10)
+- `spinsUsedToday`: Total spins used today (counted from stored spin usage records)
+- `spinsRemainingToday`: Remaining spins for today
+- `totalSpins`: Lifetime total spins used by user
+- If the user is blocked, request returns **403 Account Blocked** (same as other protected APIs)
+
+---
+
+### POST /users/dailyspin/use
+Use/consume spins and **note down** (store) the spin usage. This is how the app should record spin count usage.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Request Body (Optional):**
+```json
+{
+  "SpinCount": 1
+}
+```
+
+**Notes:**
+- If `SpinCount` is not sent, it defaults to `1`
+- `SpinCount` must be a positive integer
+- Cannot exceed remaining spins for today
+- Each successful call stores a spin usage record in DB (note down)
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Spin usage recorded successfully",
+  "data": {
+    "spinCountUsed": 1,
+    "dailySpinLimit": 20,
+    "spinsUsedToday": 6,
+    "spinsRemainingToday": 14,
+    "totalSpins": 121
+  }
+}
+```
+
+**Error Responses:**
+
+#### 400 Bad Request - Invalid SpinCount
+```json
+{
+  "message": "SpinCount must be a positive integer"
+}
+```
+
+#### 400 Bad Request - Daily Limit Exceeded
+```json
+{
+  "message": "Daily spin limit exceeded. Remaining spins today: 0",
+  "data": {
+    "dailySpinLimit": 20,
+    "spinsUsedToday": 20,
+    "spinsRemainingToday": 0
+  }
+}
+```
+
+---
+
+## Leaderboard APIs
+
+### GET /users/leaderboard
+Get users leaderboard ranked by wallet balance or coins. Shows top users and current user's rank.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Query Parameters (Optional):**
+- `type`: Leaderboard type - `wallet` (default) or `coins`
+- `limit`: Number of users per page (default: 100, max: 500)
+- `page`: Page number (default: 1)
+
+**Example Request:**
+```
+GET /users/leaderboard?type=wallet&limit=50&page=1
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Leaderboard retrieved successfully",
+  "data": {
+    "type": "wallet",
+    "leaderboard": [
+      {
+        "rank": 1,
+        "referCode": "PRK08F9",
+        "coins": 5000,
+        "walletBalance": 10000
+      },
+      {
+        "rank": 2,
+        "referCode": "PRK12A5",
+        "coins": 3000,
+        "walletBalance": 8000
+      },
+      {
+        "rank": 3,
+        "referCode": "PRK45M2",
+        "coins": 2000,
+        "walletBalance": 6000
+      }
+    ],
+    "currentUser": {
+      "rank": 25,
+      "referCode": "PRK45M2",
+      "coins": 500,
+      "walletBalance": 1000
+    },
+    "pagination": {
+      "currentPage": 1,
+      "totalPages": 5,
+      "totalUsers": 500,
+      "limit": 100,
+      "hasNextPage": true,
+      "hasPrevPage": false
+    },
+    "userRank": 25,
+    "userInCurrentPage": false
+  }
+}
+```
+
+**Note:**
+- Leaderboard returns only: `rank`, `referCode`, `coins`, and `walletBalance`
+- Leaderboard is sorted by wallet balance (descending) by default, or by coins if `type=coins`
+- Blocked users are excluded from the leaderboard
+- Shows current user's rank and position with same fields (rank, referCode, coins, walletBalance)
+- Includes pagination for large leaderboards
+- `userInCurrentPage` indicates if current user appears in the current page results
+
+**Error Responses:**
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 403 Forbidden - Account Blocked
+```json
+{
+  "message": "Your account has been blocked",
+  "isBlocked": true,
+  "blockedAt": "2024-01-18T22:30:00.000Z",
+  "blockedReason": "Violation of terms of service"
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User Not Found"
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+**Example Usage:**
+
+**Using cURL:**
+```bash
+curl -X GET "http://localhost:3100/users/leaderboard?type=wallet&limit=50&page=1" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+**Using JavaScript (Fetch API):**
+```javascript
+const token = localStorage.getItem('token');
+fetch('http://localhost:3100/users/leaderboard?type=wallet&limit=50&page=1', {
+  method: 'GET',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Leaderboard:', data.data.leaderboard);
+  console.log('My Rank:', data.data.currentUser.rank);
+  console.log('My Position:', data.data.userRank);
+})
+.catch(error => console.error('Error:', error));
+```
+
+---
+
+### GET /users/leaderboard/top
+Get top users leaderboard (Public - No authentication required). Shows top users by wallet balance or coins.
+
+**Headers:**
+```
+Content-Type: application/json
+```
+
+**Query Parameters (Optional):**
+- `type`: Leaderboard type - `wallet` (default) or `coins`
+- `limit`: Number of top users to show (default: 10, max: 100)
+
+**Example Request:**
+```
+GET /users/leaderboard/top?type=wallet&limit=20
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Top users leaderboard retrieved successfully",
+  "data": {
+    "type": "wallet",
+    "leaderboard": [
+      {
+        "rank": 1,
+        "referCode": "PRK08F9",
+        "coins": 5000,
+        "walletBalance": 10000
+      },
+      {
+        "rank": 2,
+        "referCode": "PRK12A5",
+        "coins": 3000,
+        "walletBalance": 8000
+      },
+      {
+        "rank": 3,
+        "referCode": "PRK45M2",
+        "coins": 2000,
+        "walletBalance": 6000
+      }
+    ],
+    "totalShown": 3
+  }
+}
+```
+
+**Note:**
+- This is a public endpoint - no authentication required
+- Shows only top users (limited by `limit` parameter)
+- Returns only: `rank`, `referCode`, `coins`, and `walletBalance`
+- Blocked users are excluded from the leaderboard
+- Leaderboard is sorted by wallet balance (descending) by default, or by coins if `type=coins`
+
+**Error Responses:**
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+**Example Usage:**
+
+**Using cURL:**
+```bash
+curl -X GET "http://localhost:3100/users/leaderboard/top?type=wallet&limit=20" \
+  -H "Content-Type: application/json"
+```
+
+**Using JavaScript (Fetch API):**
+```javascript
+fetch('http://localhost:3100/users/leaderboard/top?type=wallet&limit=20', {
+  method: 'GET',
+  headers: {
+    'Content-Type': 'application/json'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Top Users:', data.data.leaderboard);
+  console.log('Leaderboard Type:', data.data.type);
+})
+.catch(error => console.error('Error:', error));
+```
+
+**Notes:**
+- Leaderboard APIs show users ranked by wallet balance or coins
+- **Response Format**: Both endpoints return only `rank`, `referCode`, `coins`, and `walletBalance`
+- Blocked users are automatically excluded from leaderboards
+- Protected leaderboard endpoint (`/users/leaderboard`) shows current user's rank and position
+- Public leaderboard endpoint (`/users/leaderboard/top`) shows top users only
+- Leaderboard supports pagination for large user bases
+- Current user's rank is calculated and shown in protected endpoint with same fields (rank, referCode, coins, walletBalance)
+- Sorting: Wallet balance leaderboard sorts by WalletBalance (desc), then Coins (desc)
+- Sorting: Coins leaderboard sorts by Coins (desc), then WalletBalance (desc)
+
+---
+
 ## Notes
 
 - All endpoints require `Content-Type: application/json` header
@@ -1454,12 +1803,17 @@ Authorization: Bearer <JWT_TOKEN>
 - Users can only login from their registered device - DeviceId must match during login
 - SignupTime is automatically recorded when user signs up
 - LastLoginTime is automatically updated on each successful login
-- Passwords are securely hashed using bcrypt before storage
+- Passwords are encrypted using crypto-js (AES encryption) before storage
 - GET endpoints (`/users/wallet` and `/users/refercode`) require JWT token authentication
 - Include JWT token in `Authorization: Bearer <token>` header for protected routes
 - JWT tokens expire after 30 days - users will need to login again after expiration
 - Set `JWT_SECRET` environment variable for production (defaults to a placeholder if not set)
 - The base URL may vary depending on your server configuration
+- **User Blocking System**: Admin can block/unblock users via admin APIs
+- **Blocked users cannot login** - login endpoint checks blocked status and returns 403 error if blocked
+- **Blocked users cannot access any protected APIs** - all protected endpoints automatically check blocked status via middleware
+- When a blocked user tries to access any protected API, they receive a 403 error with blocked status details
+- Blocked status includes `isBlocked` (boolean), `blockedAt` (timestamp), and `blockedReason` (optional reason)
 - ReferCode is automatically generated and cannot be manually set
 - Each user must have a unique combination of MobileNumber and DeviceId
 - Coins and WalletBalance are initialized to 0 when a user signs up

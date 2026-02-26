@@ -1,7 +1,7 @@
 var express = require('express');
 var router = express.Router();
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
+const { encryptPassword, decryptPassword, comparePassword } = require('../utilities/crypto');
 const multer = require('multer');
 const mongoose = require('mongoose');
 const { uploadToS3, uploadBase64ToS3 } = require('../utilities/s3Upload');
@@ -29,6 +29,8 @@ let captchaSolveModel = require('../models/captchaSolve.model')
 let referralSettingsModel = require('../models/referralSettings.model')
 let dailyBonusSettingsModel = require('../models/dailyBonusSettings.model')
 let dailyBonusClaimModel = require('../models/dailyBonusClaim.model')
+let dailySpinSettingsModel = require('../models/dailySpinSettings.model')
+let dailySpinUsageModel = require('../models/dailySpinUsage.model')
 let withdrawalRequestModel = require('../models/withdrawalRequest.model')
 let appModel = require('../models/app.model')
 let appInstallationSubmissionModel = require('../models/appInstallationSubmission.model')
@@ -114,13 +116,12 @@ router.post('/signup', async (req, res) => {
       })
     }
 
-    // Hash password
-    const saltRounds = 10;
-    let hashedPassword;
+    // Encrypt password using crypto-js
+    let encryptedPassword;
     try {
-      hashedPassword = await bcrypt.hash(Password, saltRounds);
-    } catch (hashError) {
-      console.error('Signup Error - Password hashing failed:', hashError);
+      encryptedPassword = encryptPassword(Password);
+    } catch (encryptError) {
+      console.error('Signup Error - Password encryption failed:', encryptError);
       return res.status(500).json({
         message: "Failed to process password. Please try again."
       })
@@ -232,7 +233,7 @@ router.post('/signup', async (req, res) => {
     try {
       User_data = await userModel.create({
         MobileNumber: MobileNumber.trim(),
-        Password: hashedPassword,
+        Password: encryptedPassword,
         DeviceId: DeviceId.trim(),
         ReferCode: referCode,
         ReferredBy: referredBy,
@@ -352,8 +353,8 @@ router.post('/login', async (req, res) => {
       })
     }
 
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(Password, user.Password)
+    // Verify password using crypto-js decryption
+    const isPasswordValid = comparePassword(Password, user.Password)
     if (!isPasswordValid) {
       return res.status(401).json({
         message: "Invalid password"
@@ -364,6 +365,16 @@ router.post('/login', async (req, res) => {
     if (user.DeviceId !== DeviceId.trim()) {
       return res.status(403).json({
         message: "Device ID mismatch. You can only login from your registered device."
+      })
+    }
+
+    // Check if user is blocked
+    if (user.IsBlocked === true) {
+      return res.status(403).json({
+        message: "Your account has been blocked",
+        isBlocked: true,
+        blockedAt: user.BlockedAt,
+        blockedReason: user.BlockedReason || "Account blocked by administrator"
       })
     }
 
@@ -390,7 +401,8 @@ router.post('/login', async (req, res) => {
         Coins: user.Coins || 0,
         WalletBalance: user.WalletBalance || 0,
         _id: user._id,
-        LastLoginTime: user.LastLoginTime
+        LastLoginTime: user.LastLoginTime,
+        isBlocked: user.IsBlocked || false
       },
       token: token
     })
@@ -403,8 +415,8 @@ router.post('/login', async (req, res) => {
   }
 })
 
-// Middleware to verify JWT token
-const verifyToken = (req, res, next) => {
+// Middleware to verify JWT token and check if user is blocked
+const verifyToken = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1] || req.headers.authorization
   
   if (!token) {
@@ -416,6 +428,24 @@ const verifyToken = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production')
     req.user = decoded
+    
+    // Check if user is blocked
+    const user = await userModel.findById(decoded.id)
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found"
+      })
+    }
+    
+    if (user.IsBlocked === true) {
+      return res.status(403).json({
+        message: "Your account has been blocked",
+        isBlocked: true,
+        blockedAt: user.BlockedAt,
+        blockedReason: user.BlockedReason || "Account blocked by administrator"
+      })
+    }
+    
     next()
   } catch (err) {
     return res.status(401).json({
@@ -446,6 +476,9 @@ router.get('/profile', verifyToken, async (req, res) => {
         coins: user.Coins || 0,
         walletBalance: user.WalletBalance || 0,
         referredBy: user.ReferredBy || null,
+        isBlocked: user.IsBlocked || false,
+        blockedAt: user.BlockedAt || null,
+        blockedReason: user.BlockedReason || null,
         signupTime: user.SignupTime,
         lastLoginTime: user.LastLoginTime,
         createdAt: user.createdAt,
@@ -560,6 +593,77 @@ router.post('/addcoins', verifyToken, async (req, res) => {
       message: "Internal Server Error",
       error: process.env.NODE_ENV === 'production' 
         ? "Failed to add coins. Please try again later." 
+        : err.message
+    })
+  }
+})
+
+// Add RS (Rupees) to User WalletBalance API
+router.post('/addwallet', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { Amount } = req.body
+
+    // Validate required fields
+    if (Amount === undefined || Amount === null) {
+      return res.status(400).json({
+        message: "Amount is required"
+      })
+    }
+
+    // Validate amount value
+    if (typeof Amount !== 'number' || isNaN(Amount)) {
+      return res.status(400).json({
+        message: "Amount must be a valid number"
+      })
+    }
+
+    if (Amount <= 0) {
+      return res.status(400).json({
+        message: "Amount must be greater than 0"
+      })
+    }
+
+    // Check database connection
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Add Wallet Error: Database not connected');
+      return res.status(500).json({
+        message: "Database connection error. Please try again later."
+      })
+    }
+
+    // Find user
+    let user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    const previousWalletBalance = user.WalletBalance || 0
+    user.WalletBalance = previousWalletBalance + Amount
+    await user.save()
+
+    // Refresh
+    user = await userModel.findById(userId)
+
+    return res.json({
+      message: "Wallet balance added successfully",
+      data: {
+        amountAdded: Amount,
+        previousWalletBalance: previousWalletBalance,
+        currentWalletBalance: user.WalletBalance || 0,
+        coins: user.Coins || 0,
+        MobileNumber: user.MobileNumber
+      }
+    })
+  } catch (err) {
+    console.error('Add Wallet Error:', err);
+    console.error('Add Wallet Error Stack:', err.stack);
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: process.env.NODE_ENV === 'production'
+        ? "Failed to add wallet balance. Please try again later."
         : err.message
     })
   }
@@ -1992,6 +2096,358 @@ router.get('/scratchcard/history', verifyToken, async (req, res) => {
 
   } catch (err) {
     console.error('Get Scratch Card History - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== DAILY SPIN APIs ====================
+
+// Get Daily Spin Status API
+router.get('/dailyspin/status', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    // Get spin settings
+    let settings = await dailySpinSettingsModel.findOne()
+    if (!settings) {
+      settings = { DailySpinLimit: 10 }
+    }
+
+    // Today range
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+
+    // Spins used today
+    const todayAgg = await dailySpinUsageModel.aggregate([
+      {
+        $match: {
+          UserId: user._id,
+          SpinDate: { $gte: today, $lt: tomorrow }
+        }
+      },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$SpinCount', 0] } } } }
+    ])
+    const spinsUsedToday = todayAgg[0]?.total || 0
+
+    const dailyLimit = settings.DailySpinLimit || 10
+    const remainingToday = Math.max(dailyLimit - spinsUsedToday, 0)
+
+    // Total spins (lifetime)
+    const totalAgg = await dailySpinUsageModel.aggregate([
+      { $match: { UserId: user._id } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$SpinCount', 0] } } } }
+    ])
+    const totalSpins = totalAgg[0]?.total || 0
+
+    return res.json({
+      message: "Daily spin status retrieved successfully",
+      data: {
+        dailySpinLimit: dailyLimit,
+        spinsUsedToday: spinsUsedToday,
+        spinsRemainingToday: remainingToday,
+        totalSpins: totalSpins
+      }
+    })
+  } catch (err) {
+    console.error('Get Daily Spin Status - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Use Daily Spin API (consume spins)
+router.post('/dailyspin/use', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { SpinCount } = req.body
+
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    const countToUse = SpinCount === undefined || SpinCount === null ? 1 : SpinCount
+    if (typeof countToUse !== 'number' || isNaN(countToUse)) {
+      return res.status(400).json({
+        message: "SpinCount must be a valid number"
+      })
+    }
+    if (!Number.isInteger(countToUse) || countToUse <= 0) {
+      return res.status(400).json({
+        message: "SpinCount must be a positive integer"
+      })
+    }
+
+    // Get spin settings
+    let settings = await dailySpinSettingsModel.findOne()
+    if (!settings) {
+      settings = { DailySpinLimit: 10 }
+    }
+
+    const dailyLimit = settings.DailySpinLimit || 10
+
+    // Today range
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+
+    // Spins used today
+    const todayAgg = await dailySpinUsageModel.aggregate([
+      {
+        $match: {
+          UserId: user._id,
+          SpinDate: { $gte: today, $lt: tomorrow }
+        }
+      },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$SpinCount', 0] } } } }
+    ])
+    const spinsUsedToday = todayAgg[0]?.total || 0
+    const remainingToday = Math.max(dailyLimit - spinsUsedToday, 0)
+
+    if (countToUse > remainingToday) {
+      return res.status(400).json({
+        message: `Daily spin limit exceeded. Remaining spins today: ${remainingToday}`,
+        data: {
+          dailySpinLimit: dailyLimit,
+          spinsUsedToday: spinsUsedToday,
+          spinsRemainingToday: remainingToday
+        }
+      })
+    }
+
+    // Record usage (note down)
+    await dailySpinUsageModel.create({
+      UserId: user._id,
+      SpinDate: new Date(),
+      SpinCount: countToUse
+    })
+
+    // Recompute today usage after insert
+    const afterAgg = await dailySpinUsageModel.aggregate([
+      {
+        $match: {
+          UserId: user._id,
+          SpinDate: { $gte: today, $lt: tomorrow }
+        }
+      },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$SpinCount', 0] } } } }
+    ])
+    const newUsedToday = afterAgg[0]?.total || (spinsUsedToday + countToUse)
+    const newRemaining = Math.max(dailyLimit - newUsedToday, 0)
+
+    // Total spins (lifetime)
+    const totalAgg = await dailySpinUsageModel.aggregate([
+      { $match: { UserId: user._id } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$SpinCount', 0] } } } }
+    ])
+    const totalSpins = totalAgg[0]?.total || 0
+
+    return res.json({
+      message: "Spin usage recorded successfully",
+      data: {
+        spinCountUsed: countToUse,
+        dailySpinLimit: dailyLimit,
+        spinsUsedToday: newUsedToday,
+        spinsRemainingToday: newRemaining,
+        totalSpins: totalSpins
+      }
+    })
+  } catch (err) {
+    console.error('Use Daily Spin - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== LEADERBOARD APIs ====================
+
+// Get Users Leaderboard API (Top Wallet Balance)
+router.get('/leaderboard', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { type = 'wallet', limit = 100, page = 1 } = req.query
+    
+    // Validate user exists
+    let currentUser = await userModel.findById(userId)
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    // Validate type
+    const validTypes = ['wallet', 'coins']
+    const leaderboardType = validTypes.includes(type) ? type : 'wallet'
+    
+    // Validate limit and page
+    const limitNum = Math.min(parseInt(limit) || 100, 500) // Max 500
+    const pageNum = Math.max(parseInt(page) || 1, 1)
+    const skip = (pageNum - 1) * limitNum
+
+    // Build sort criteria based on type
+    let sortCriteria = {}
+    if (leaderboardType === 'wallet') {
+      sortCriteria = { WalletBalance: -1, Coins: -1 } // Sort by wallet balance, then coins
+    } else {
+      sortCriteria = { Coins: -1, WalletBalance: -1 } // Sort by coins, then wallet balance
+    }
+
+    // Get total count for pagination
+    const totalUsers = await userModel.countDocuments({ IsBlocked: { $ne: true } })
+
+    // Get leaderboard users (exclude blocked users)
+    const leaderboardUsers = await userModel.find({ IsBlocked: { $ne: true } })
+      .sort(sortCriteria)
+      .skip(skip)
+      .limit(limitNum)
+      .select('ReferCode Coins WalletBalance')
+
+    // Format leaderboard data - only rank, referCode, coins, walletBalance
+    const leaderboard = leaderboardUsers.map((user, index) => ({
+      rank: skip + index + 1,
+      referCode: user.ReferCode,
+      coins: user.Coins || 0,
+      walletBalance: user.WalletBalance || 0
+    }))
+
+    // Find current user's rank
+    let userRank = null
+    let userPosition = null
+    
+    if (leaderboardType === 'wallet') {
+      // Count users with higher wallet balance
+      const usersAbove = await userModel.countDocuments({
+        $or: [
+          { WalletBalance: { $gt: currentUser.WalletBalance || 0 } },
+          {
+            WalletBalance: currentUser.WalletBalance || 0,
+            Coins: { $gt: currentUser.Coins || 0 }
+          }
+        ],
+        IsBlocked: { $ne: true }
+      })
+      userRank = usersAbove + 1
+    } else {
+      // Count users with higher coins
+      const usersAbove = await userModel.countDocuments({
+        $or: [
+          { Coins: { $gt: currentUser.Coins || 0 } },
+          {
+            Coins: currentUser.Coins || 0,
+            WalletBalance: { $gt: currentUser.WalletBalance || 0 }
+          }
+        ],
+        IsBlocked: { $ne: true }
+      })
+      userRank = usersAbove + 1
+    }
+
+    // Check if current user is in the current page
+    const currentUserInLeaderboard = leaderboard.find(u => u.referCode === currentUser.ReferCode)
+    if (currentUserInLeaderboard) {
+      userPosition = currentUserInLeaderboard.rank
+    }
+
+    // Get current user's stats - only rank, referCode, coins, walletBalance
+    const currentUserStats = {
+      rank: userRank,
+      referCode: currentUser.ReferCode,
+      coins: currentUser.Coins || 0,
+      walletBalance: currentUser.WalletBalance || 0
+    }
+
+    return res.json({
+      message: "Leaderboard retrieved successfully",
+      data: {
+        type: leaderboardType,
+        leaderboard: leaderboard,
+        currentUser: currentUserStats,
+        pagination: {
+          currentPage: pageNum,
+          totalPages: Math.ceil(totalUsers / limitNum),
+          totalUsers: totalUsers,
+          limit: limitNum,
+          hasNextPage: pageNum < Math.ceil(totalUsers / limitNum),
+          hasPrevPage: pageNum > 1
+        },
+        userRank: userRank,
+        userInCurrentPage: userPosition !== null
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Leaderboard - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get Top Users by Wallet Balance API (Public - No Auth Required)
+router.get('/leaderboard/top', async (req, res) => {
+  try {
+    const { type = 'wallet', limit = 10 } = req.query
+    
+    // Validate type
+    const validTypes = ['wallet', 'coins']
+    const leaderboardType = validTypes.includes(type) ? type : 'wallet'
+    
+    // Validate limit
+    const limitNum = Math.min(parseInt(limit) || 10, 100) // Max 100, default 10
+
+    // Build sort criteria based on type
+    let sortCriteria = {}
+    if (leaderboardType === 'wallet') {
+      sortCriteria = { WalletBalance: -1, Coins: -1 }
+    } else {
+      sortCriteria = { Coins: -1, WalletBalance: -1 }
+    }
+
+    // Get top users (exclude blocked users)
+    const topUsers = await userModel.find({ IsBlocked: { $ne: true } })
+      .sort(sortCriteria)
+      .limit(limitNum)
+      .select('ReferCode Coins WalletBalance')
+
+    // Format leaderboard data - only rank, referCode, coins, walletBalance
+    const leaderboard = topUsers.map((user, index) => ({
+      rank: index + 1,
+      referCode: user.ReferCode,
+      coins: user.Coins || 0,
+      walletBalance: user.WalletBalance || 0
+    }))
+
+    return res.json({
+      message: "Top users leaderboard retrieved successfully",
+      data: {
+        type: leaderboardType,
+        leaderboard: leaderboard,
+        totalShown: leaderboard.length
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Top Leaderboard - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message

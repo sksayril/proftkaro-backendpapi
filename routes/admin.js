@@ -1,11 +1,13 @@
 var express = require('express');
 var router = express.Router();
 const jwt = require('jsonwebtoken');
+const { encryptPassword, decryptPassword } = require('../utilities/crypto');
 
 let adminModel = require('../models/admin.model')
 let captchaSettingsModel = require('../models/captchaSettings.model')
 let referralSettingsModel = require('../models/referralSettings.model')
 let dailyBonusSettingsModel = require('../models/dailyBonusSettings.model')
+let dailySpinSettingsModel = require('../models/dailySpinSettings.model')
 let withdrawalRequestModel = require('../models/withdrawalRequest.model')
 let userModel = require('../models/user.model')
 let appModel = require('../models/app.model')
@@ -403,6 +405,81 @@ router.get('/dailybonus/settings', verifyAdminToken, async (req, res) => {
   }
 })
 
+// ==================== DAILY SPIN SETTINGS APIs ====================
+
+// Set Daily Spin Settings API
+router.post('/dailyspin/settings', verifyAdminToken, async (req, res) => {
+  try {
+    const { DailySpinLimit } = req.body
+
+    if (DailySpinLimit === undefined || DailySpinLimit === null) {
+      return res.status(400).json({
+        message: "DailySpinLimit is required"
+      })
+    }
+
+    if (typeof DailySpinLimit !== 'number' || isNaN(DailySpinLimit)) {
+      return res.status(400).json({
+        message: "DailySpinLimit must be a valid number"
+      })
+    }
+
+    if (DailySpinLimit <= 0) {
+      return res.status(400).json({
+        message: "DailySpinLimit must be greater than 0"
+      })
+    }
+
+    // Update or create settings
+    let settings = await dailySpinSettingsModel.findOne()
+    if (settings) {
+      settings.DailySpinLimit = DailySpinLimit
+      await settings.save()
+    } else {
+      settings = await dailySpinSettingsModel.create({
+        DailySpinLimit: DailySpinLimit
+      })
+    }
+
+    return res.json({
+      message: "Daily spin settings updated successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    console.error('Set Daily Spin Settings - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get Daily Spin Settings API
+router.get('/dailyspin/settings', verifyAdminToken, async (req, res) => {
+  try {
+    let settings = await dailySpinSettingsModel.findOne()
+    if (!settings) {
+      // Return default settings if not exists
+      settings = {
+        DailySpinLimit: 10
+      }
+    }
+
+    return res.json({
+      message: "Daily spin settings retrieved successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    console.error('Get Daily Spin Settings - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
 // Get All Withdrawal Requests API
 router.get('/withdrawal/requests', verifyToken, async (req, res) => {
   try {
@@ -637,15 +714,46 @@ router.get('/users/:userId', verifyToken, async (req, res) => {
       { $group: { _id: null, total: { $sum: '$Amount' } } }
     ])
 
+    // Get app installation submissions (task completion data)
+    const appSubmissions = await appInstallationSubmissionModel.find({ UserId: userId })
+      .populate('AppId', 'AppName AppImage RewardCoins Difficulty')
+      .sort({ createdAt: -1 })
+
+    // Calculate app submission statistics
+    const totalAppSubmissions = appSubmissions.length
+    const approvedAppSubmissions = appSubmissions.filter(s => s.Status === 'Approved').length
+    const pendingAppSubmissions = appSubmissions.filter(s => s.Status === 'Pending').length
+    const rejectedAppSubmissions = appSubmissions.filter(s => s.Status === 'Rejected').length
+    const totalEarningsFromApps = appSubmissions
+      .filter(s => s.Status === 'Approved')
+      .reduce((sum, sub) => sum + (sub.AppId?.RewardCoins || 0), 0)
+
+    // Decrypt password to get original password
+    let originalPassword = null;
+    try {
+      if (user.Password) {
+        originalPassword = decryptPassword(user.Password);
+      }
+    } catch (decryptError) {
+      console.error('Error decrypting password:', decryptError);
+      // Continue even if decryption fails, password will be null
+    }
+
     // Format response with all user details
     const userDetails = {
       userId: user._id,
       mobileNumber: user.MobileNumber,
+      password: originalPassword, // Original decrypted password
       deviceId: user.DeviceId,
       referCode: user.ReferCode,
       coins: user.Coins || 0,
       walletBalance: user.WalletBalance || 0,
       referredBy: user.ReferredBy || null,
+      isBlocked: user.IsBlocked || false,
+      blockedAt: user.BlockedAt || null,
+      blockedReason: user.BlockedReason || null,
+      signupTime: user.SignupTime,
+      lastLoginTime: user.LastLoginTime,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
       statistics: {
@@ -654,7 +762,12 @@ router.get('/users/:userId', verifyToken, async (req, res) => {
         pendingWithdrawals: withdrawalRequests.filter(r => r.Status === 'Pending').length,
         approvedWithdrawals: withdrawalRequests.filter(r => r.Status === 'Approved').length,
         rejectedWithdrawals: withdrawalRequests.filter(r => r.Status === 'Rejected').length,
-        totalWithdrawn: totalReferralEarnings[0]?.total || 0
+        totalWithdrawn: totalReferralEarnings[0]?.total || 0,
+        totalAppSubmissions: totalAppSubmissions,
+        approvedAppSubmissions: approvedAppSubmissions,
+        pendingAppSubmissions: pendingAppSubmissions,
+        rejectedAppSubmissions: rejectedAppSubmissions,
+        totalEarningsFromApps: totalEarningsFromApps
       },
       withdrawalRequests: withdrawalRequests.map(req => ({
         requestId: req._id,
@@ -663,6 +776,19 @@ router.get('/users/:userId', verifyToken, async (req, res) => {
         status: req.Status,
         createdAt: req.createdAt,
         updatedAt: req.updatedAt
+      })),
+      appSubmissions: appSubmissions.map(sub => ({
+        submissionId: sub._id,
+        appId: sub.AppId?._id,
+        appName: sub.AppId?.AppName,
+        appImage: sub.AppId?.AppImage,
+        appRewardCoins: sub.AppId?.RewardCoins,
+        appDifficulty: sub.AppId?.Difficulty,
+        screenshotUrl: sub.ScreenshotUrl,
+        status: sub.Status,
+        adminNotes: sub.AdminNotes,
+        createdAt: sub.createdAt,
+        updatedAt: sub.updatedAt
       }))
     }
 
@@ -673,6 +799,325 @@ router.get('/users/:userId', verifyToken, async (req, res) => {
 
   } catch (err) {
     console.error('Get User Details - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Edit User Data API (Admin)
+router.put('/users/:userId', verifyToken, async (req, res) => {
+  try {
+    const { userId } = req.params
+    const { 
+      MobileNumber, 
+      Password, 
+      DeviceId, 
+      Coins, 
+      WalletBalance 
+    } = req.body
+
+    // Find user
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found"
+      })
+    }
+
+    // Decrypt original password for comparison
+    let originalPasswordValue = null;
+    try {
+      if (user.Password) {
+        originalPasswordValue = decryptPassword(user.Password);
+      }
+    } catch (decryptError) {
+      console.error('Error decrypting original password:', decryptError);
+    }
+
+    // Store original values for response
+    const originalValues = {
+      mobileNumber: user.MobileNumber,
+      password: originalPasswordValue,
+      deviceId: user.DeviceId,
+      coins: user.Coins || 0,
+      walletBalance: user.WalletBalance || 0
+    }
+
+    // Update MobileNumber if provided
+    if (MobileNumber !== undefined) {
+      if (typeof MobileNumber !== 'string' || MobileNumber.trim().length === 0) {
+        return res.status(400).json({
+          message: "MobileNumber must be a valid non-empty string"
+        })
+      }
+
+      // Check if MobileNumber is already taken by another user
+      const existingUser = await userModel.findOne({ 
+        MobileNumber: MobileNumber.trim(),
+        _id: { $ne: userId }
+      })
+      
+      if (existingUser) {
+        return res.status(400).json({
+          message: "MobileNumber already exists for another user"
+        })
+      }
+
+      user.MobileNumber = MobileNumber.trim()
+    }
+
+    // Update Password if provided
+    if (Password !== undefined) {
+      if (typeof Password !== 'string' || Password.length < 6) {
+        return res.status(400).json({
+          message: "Password must be at least 6 characters long"
+        })
+      }
+
+      // Encrypt password using crypto-js
+      const encryptedPassword = encryptPassword(Password)
+      user.Password = encryptedPassword
+    }
+
+    // Update DeviceId if provided
+    if (DeviceId !== undefined) {
+      if (typeof DeviceId !== 'string' || DeviceId.trim().length === 0) {
+        return res.status(400).json({
+          message: "DeviceId must be a valid non-empty string"
+        })
+      }
+
+      // Check if DeviceId is already taken by another user
+      const existingDevice = await userModel.findOne({ 
+        DeviceId: DeviceId.trim(),
+        _id: { $ne: userId }
+      })
+      
+      if (existingDevice) {
+        return res.status(400).json({
+          message: "DeviceId already exists for another user"
+        })
+      }
+
+      user.DeviceId = DeviceId.trim()
+    }
+
+    // Update Coins if provided
+    if (Coins !== undefined) {
+      if (typeof Coins !== 'number' || isNaN(Coins)) {
+        return res.status(400).json({
+          message: "Coins must be a valid number"
+        })
+      }
+
+      if (Coins < 0) {
+        return res.status(400).json({
+          message: "Coins cannot be negative"
+        })
+      }
+
+      user.Coins = Coins
+    }
+
+    // Update WalletBalance if provided
+    if (WalletBalance !== undefined) {
+      if (typeof WalletBalance !== 'number' || isNaN(WalletBalance)) {
+        return res.status(400).json({
+          message: "WalletBalance must be a valid number"
+        })
+      }
+
+      if (WalletBalance < 0) {
+        return res.status(400).json({
+          message: "WalletBalance cannot be negative"
+        })
+      }
+
+      user.WalletBalance = WalletBalance
+    }
+
+    // Check if any fields were provided to update
+    const fieldsToUpdate = ['MobileNumber', 'Password', 'DeviceId', 'Coins', 'WalletBalance']
+    const hasUpdates = fieldsToUpdate.some(field => req.body[field] !== undefined)
+    
+    if (!hasUpdates) {
+      return res.status(400).json({
+        message: "No fields provided to update. Please provide at least one field: MobileNumber, Password, DeviceId, Coins, or WalletBalance"
+      })
+    }
+
+    // Save user
+    await user.save()
+
+    // Refresh user data to get latest values
+    const updatedUser = await userModel.findById(userId)
+
+    // Decrypt password to get original password
+    let originalPassword = null;
+    try {
+      if (updatedUser.Password) {
+        originalPassword = decryptPassword(updatedUser.Password);
+      }
+    } catch (decryptError) {
+      console.error('Error decrypting password:', decryptError);
+      // Continue even if decryption fails, password will be null
+    }
+
+    // Get user's statistics for response
+    const withdrawalRequests = await withdrawalRequestModel.find({ UserId: userId })
+    const referralCount = await userModel.countDocuments({ ReferredBy: updatedUser.ReferCode })
+
+    return res.json({
+      message: "User updated successfully",
+      data: {
+        userId: updatedUser._id,
+        mobileNumber: updatedUser.MobileNumber,
+        password: originalPassword, // Original decrypted password
+        deviceId: updatedUser.DeviceId,
+        referCode: updatedUser.ReferCode,
+        coins: updatedUser.Coins || 0,
+        walletBalance: updatedUser.WalletBalance || 0,
+        referredBy: updatedUser.ReferredBy || null,
+        isBlocked: updatedUser.IsBlocked || false,
+        blockedAt: updatedUser.BlockedAt || null,
+        blockedReason: updatedUser.BlockedReason || null,
+        createdAt: updatedUser.createdAt,
+        updatedAt: updatedUser.updatedAt,
+        changes: {
+          mobileNumber: MobileNumber !== undefined ? {
+            from: originalValues.mobileNumber,
+            to: updatedUser.MobileNumber
+          } : undefined,
+          deviceId: DeviceId !== undefined ? {
+            from: originalValues.deviceId,
+            to: updatedUser.DeviceId
+          } : undefined,
+          coins: Coins !== undefined ? {
+            from: originalValues.coins,
+            to: updatedUser.Coins || 0
+          } : undefined,
+          walletBalance: WalletBalance !== undefined ? {
+            from: originalValues.walletBalance,
+            to: updatedUser.WalletBalance || 0
+          } : undefined,
+          password: Password !== undefined ? {
+            from: originalValues.password || "N/A",
+            to: originalPassword || "N/A"
+          } : undefined
+        },
+        statistics: {
+          referralCount: referralCount,
+          totalWithdrawalRequests: withdrawalRequests.length
+        }
+      }
+    })
+
+  } catch (err) {
+    console.error('Edit User - Error:', err)
+    
+    // Handle duplicate key errors
+    if (err.code === 11000) {
+      const field = Object.keys(err.keyPattern)[0]
+      return res.status(400).json({
+        message: `${field} already exists for another user`
+      })
+    }
+
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Block User API (Admin)
+router.post('/users/:userId/block', verifyToken, async (req, res) => {
+  try {
+    const { userId } = req.params
+    const { reason } = req.body
+
+    // Find user
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found"
+      })
+    }
+
+    // Check if user is already blocked
+    if (user.IsBlocked === true) {
+      return res.status(400).json({
+        message: "User is already blocked"
+      })
+    }
+
+    // Block the user
+    user.IsBlocked = true
+    user.BlockedAt = new Date()
+    user.BlockedReason = reason || null
+    await user.save()
+
+    return res.json({
+      message: "User blocked successfully",
+      data: {
+        userId: user._id,
+        mobileNumber: user.MobileNumber,
+        isBlocked: user.IsBlocked,
+        blockedAt: user.BlockedAt,
+        blockedReason: user.BlockedReason
+      }
+    })
+
+  } catch (err) {
+    console.error('Block User - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Unblock User API (Admin)
+router.post('/users/:userId/unblock', verifyToken, async (req, res) => {
+  try {
+    const { userId } = req.params
+
+    // Find user
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found"
+      })
+    }
+
+    // Check if user is already unblocked
+    if (user.IsBlocked === false) {
+      return res.status(400).json({
+        message: "User is already unblocked"
+      })
+    }
+
+    // Unblock the user
+    user.IsBlocked = false
+    user.BlockedAt = null
+    user.BlockedReason = null
+    await user.save()
+
+    return res.json({
+      message: "User unblocked successfully",
+      data: {
+        userId: user._id,
+        mobileNumber: user.MobileNumber,
+        isBlocked: user.IsBlocked,
+        blockedAt: user.BlockedAt,
+        blockedReason: user.BlockedReason
+      }
+    })
+
+  } catch (err) {
+    console.error('Unblock User - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message

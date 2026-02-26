@@ -38,6 +38,18 @@ let schema = new mongoose.Schema({
     ReferredBy: {
         type: String,
         default: null
+    },
+    IsBlocked: {
+        type: Boolean,
+        default: false
+    },
+    BlockedAt: {
+        type: Date,
+        default: null
+    },
+    BlockedReason: {
+        type: String,
+        default: null
     }
 })
 

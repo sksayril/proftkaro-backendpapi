@@ -9,6 +9,33 @@ http://localhost:3000/admin
 
 ---
 
+## Password Encryption
+
+The application uses **crypto-js** with **AES encryption** for password storage. This allows:
+- **Encryption**: Passwords are encrypted before storage in the database
+- **Decryption**: Passwords can be decrypted to retrieve the original password text
+- **Retrieval**: Admin can view the original password text via API endpoints
+
+### Encryption Key Configuration
+
+The encryption key is stored in the `ENCRYPTION_KEY` environment variable. For production, set a strong encryption key (minimum 32 characters):
+
+```bash
+ENCRYPTION_KEY=your-very-secure-encryption-key-minimum-32-characters-long
+```
+
+If not set, a default key is used (not recommended for production).
+
+### Important Notes
+
+- Passwords are encrypted using AES encryption (not hashed)
+- Original passwords can be retrieved/decrypted
+- Admin endpoints return the original decrypted password text
+- User signup and login use crypto-js encryption/decryption
+- All password operations use the same encryption key
+
+---
+
 ## 1. Admin Signup
 
 Create a new admin account.
@@ -894,6 +921,88 @@ Content-Type: application/json
 
 ---
 
+## Daily Spin Settings APIs
+
+### POST /admin/dailyspin/settings
+Set the **daily spin limit** (how many spins a user can use per day).
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "DailySpinLimit": 20
+}
+```
+
+**Validation Rules:**
+- `DailySpinLimit` is required
+- Must be a valid number
+- Must be greater than 0
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Daily spin settings updated successfully",
+  "data": {
+    "_id": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "DailySpinLimit": 20
+  }
+}
+```
+
+**Error Responses:**
+
+#### 400 Bad Request - Missing Field
+```json
+{
+  "message": "DailySpinLimit is required"
+}
+```
+
+#### 400 Bad Request - Invalid Value
+```json
+{
+  "message": "DailySpinLimit must be a valid number"
+}
+```
+
+#### 400 Bad Request - Must be > 0
+```json
+{
+  "message": "DailySpinLimit must be greater than 0"
+}
+```
+
+---
+
+### GET /admin/dailyspin/settings
+Get the current daily spin settings.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Daily spin settings retrieved successfully",
+  "data": {
+    "DailySpinLimit": 20
+  }
+}
+```
+
+**Note:**
+- If settings are not saved yet, default `DailySpinLimit: 10` is returned
+
+---
+
 ## Withdrawal Request Management APIs
 
 ### GET /admin/withdrawal/requests
@@ -1069,6 +1178,9 @@ GET /admin/users?page=1&limit=20&search=123
         "coins": 100,
         "walletBalance": 500,
         "referredBy": null,
+        "isBlocked": false,
+        "blockedAt": null,
+        "blockedReason": null,
         "createdAt": "2024-01-18T20:00:00.000Z",
         "updatedAt": "2024-01-18T20:00:00.000Z"
       },
@@ -1101,7 +1213,8 @@ GET /admin/users?page=1&limit=20&search=123
 ```
 
 **Notes:**
-- Returns all user fields including MobileNumber, DeviceId, ReferCode, Coins, WalletBalance, ReferredBy
+- Returns all user fields including MobileNumber, DeviceId, ReferCode, Coins, WalletBalance, ReferredBy, and blocked status
+- Includes blocked status fields: `isBlocked`, `blockedAt`, `blockedReason`
 - Includes pagination information
 - Includes aggregate statistics (total coins and wallet balance across all users)
 - Supports search functionality across MobileNumber, DeviceId, and ReferCode
@@ -1126,11 +1239,17 @@ Authorization: Bearer <JWT_TOKEN>
   "data": {
     "userId": "60f7b3b3b3b3b3b3b3b3b3b1",
     "mobileNumber": "1234567890",
+    "password": "userpassword123",
     "deviceId": "device123",
     "referCode": "PRK08F9",
     "coins": 100,
     "walletBalance": 500,
     "referredBy": null,
+    "isBlocked": false,
+    "blockedAt": null,
+    "blockedReason": null,
+    "signupTime": "2024-01-18T20:00:00.000Z",
+    "lastLoginTime": "2024-01-19T10:00:00.000Z",
     "createdAt": "2024-01-18T20:00:00.000Z",
     "updatedAt": "2024-01-18T20:00:00.000Z",
     "statistics": {
@@ -1139,7 +1258,12 @@ Authorization: Bearer <JWT_TOKEN>
       "pendingWithdrawals": 1,
       "approvedWithdrawals": 2,
       "rejectedWithdrawals": 0,
-      "totalWithdrawn": 300
+      "totalWithdrawn": 300,
+      "totalAppSubmissions": 10,
+      "approvedAppSubmissions": 8,
+      "pendingAppSubmissions": 1,
+      "rejectedAppSubmissions": 1,
+      "totalEarningsFromApps": 400
     },
     "withdrawalRequests": [
       {
@@ -1158,6 +1282,21 @@ Authorization: Bearer <JWT_TOKEN>
         "createdAt": "2024-01-17T20:00:00.000Z",
         "updatedAt": "2024-01-18T10:00:00.000Z"
       }
+    ],
+    "appSubmissions": [
+      {
+        "submissionId": "60f7b3b3b3b3b3b3b3b3b3b5",
+        "appId": "60f7b3b3b3b3b3b3b3b3b3b6",
+        "appName": "Example App",
+        "appImage": "https://example.com/app-image.png",
+        "appRewardCoins": 50,
+        "appDifficulty": "Easy",
+        "screenshotUrl": "https://example.com/screenshot.png",
+        "status": "Approved",
+        "adminNotes": "Verified successfully",
+        "createdAt": "2024-01-18T21:00:00.000Z",
+        "updatedAt": "2024-01-18T21:30:00.000Z"
+      }
     ]
   }
 }
@@ -1171,10 +1310,463 @@ Authorization: Bearer <JWT_TOKEN>
 ```
 
 **Notes:**
-- Returns complete user profile with all fields
-- Includes user statistics (referral count, withdrawal history)
-- Includes all withdrawal requests for the user
-- Shows referral performance and withdrawal activity
+- Returns complete user profile with all fields including signupTime and lastLoginTime
+- **Password Field**: Returns the original decrypted password text (not encrypted/hashed)
+- Passwords are encrypted using crypto-js AES encryption and can be decrypted to retrieve the original password
+- **Blocked Status**: Includes `isBlocked`, `blockedAt`, and `blockedReason` fields to show if user is blocked
+- Includes comprehensive user statistics (referral count, withdrawal history, app submission/task completion data)
+- Includes all withdrawal requests for the user with full details
+- Includes all app installation submissions (task completions) with app details and status
+- Shows referral performance, withdrawal activity, and task completion statistics
+- App submission statistics include total submissions, approved/pending/rejected counts, and total earnings from apps
+- **Security Note**: Passwords are encrypted using crypto-js (AES encryption) which allows decryption to retrieve the original password text
+
+---
+
+### PUT /admin/users/:userId
+Edit user data including MobileNumber, Password, DeviceId, Coins, and WalletBalance.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**URL Parameters:**
+- `userId`: The ID of the user to update
+
+**Request Body (All fields optional - provide only fields you want to update):**
+```json
+{
+  "MobileNumber": "9876543210",
+  "Password": "newpassword123",
+  "DeviceId": "new-device-id",
+  "Coins": 500,
+  "WalletBalance": 1000
+}
+```
+
+**Note:**
+- All fields are optional - you can update any combination of fields
+- `MobileNumber`: Must be unique, cannot be used by another user
+- `Password`: Will be encrypted using crypto-js (AES encryption) automatically (minimum 6 characters)
+  - Password updates are supported and the original password text is shown in the response
+  - The `password` field in the response contains the decrypted/updated password text
+  - The `changes.password` object shows the old password (from) and new password (to)
+- `DeviceId`: Must be unique, cannot be used by another user
+- `Coins`: Must be a number >= 0
+- `WalletBalance`: Must be a number >= 0
+- At least one field must be provided to update
+
+**Response (Success - 200):**
+```json
+{
+  "message": "User updated successfully",
+  "data": {
+    "userId": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "mobileNumber": "9876543210",
+    "password": "newpassword123",
+    "deviceId": "new-device-id",
+    "referCode": "PRK08F9",
+    "coins": 500,
+    "walletBalance": 1000,
+    "referredBy": null,
+    "isBlocked": false,
+    "blockedAt": null,
+    "blockedReason": null,
+    "createdAt": "2024-01-18T20:00:00.000Z",
+    "updatedAt": "2024-01-18T22:30:00.000Z",
+    "changes": {
+      "mobileNumber": {
+        "from": "1234567890",
+        "to": "9876543210"
+      },
+      "password": {
+        "from": "oldpassword123",
+        "to": "newpassword123"
+      },
+      "deviceId": {
+        "from": "device123",
+        "to": "new-device-id"
+      },
+      "coins": {
+        "from": 100,
+        "to": 500
+      },
+      "walletBalance": {
+        "from": 500,
+        "to": 1000
+      }
+    },
+    "statistics": {
+      "referralCount": 5,
+      "totalWithdrawalRequests": 3
+    }
+  }
+}
+```
+
+**Error Responses:**
+
+#### 400 Bad Request - No Fields Provided
+```json
+{
+  "message": "No fields provided to update. Please provide at least one field: MobileNumber, Password, DeviceId, Coins, or WalletBalance"
+}
+```
+
+#### 400 Bad Request - Invalid MobileNumber
+```json
+{
+  "message": "MobileNumber must be a valid non-empty string"
+}
+```
+
+#### 400 Bad Request - MobileNumber Already Exists
+```json
+{
+  "message": "MobileNumber already exists for another user"
+}
+```
+
+#### 400 Bad Request - Invalid Password
+```json
+{
+  "message": "Password must be at least 6 characters long"
+}
+```
+
+#### 400 Bad Request - Invalid DeviceId
+```json
+{
+  "message": "DeviceId must be a valid non-empty string"
+}
+```
+
+#### 400 Bad Request - DeviceId Already Exists
+```json
+{
+  "message": "DeviceId already exists for another user"
+}
+```
+
+#### 400 Bad Request - Invalid Coins
+```json
+{
+  "message": "Coins must be a valid number"
+}
+```
+
+#### 400 Bad Request - Negative Coins
+```json
+{
+  "message": "Coins cannot be negative"
+}
+```
+
+#### 400 Bad Request - Invalid WalletBalance
+```json
+{
+  "message": "WalletBalance must be a valid number"
+}
+```
+
+#### 400 Bad Request - Negative WalletBalance
+```json
+{
+  "message": "WalletBalance cannot be negative"
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User not found"
+}
+```
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 401 Unauthorized - Invalid Token
+```json
+{
+  "message": "Invalid or expired token"
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+**Notes:**
+- Admin can update any user's data including profile information, device ID, coins, wallet balance, and **password**
+- **Password Update**: Admin can update user passwords by providing the new password in the request body
+- Password is automatically encrypted using crypto-js (AES encryption) before storage
+- Passwords can be decrypted to retrieve the original password text
+- The response shows the updated password in plain text (decrypted) in the `password` field
+- The `changes.password` object shows both the old password (from) and new password (to) for password updates
+- **Blocked Status**: Response includes `isBlocked`, `blockedAt`, and `blockedReason` fields showing user's blocked status
+- All uniqueness validations are enforced (MobileNumber and DeviceId must be unique)
+- Response includes before/after values for all changed fields including password
+- User statistics are included in the response
+- This endpoint requires admin authentication token
+
+**Example Usage:**
+
+**Using cURL - Update Password and Other Fields:**
+```bash
+curl -X PUT http://localhost:3000/admin/users/60f7b3b3b3b3b3b3b3b3b3b1 \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "Password": "newpassword123",
+    "Coins": 500,
+    "WalletBalance": 1000
+  }'
+```
+
+**Using cURL - Update Only Password:**
+```bash
+curl -X PUT http://localhost:3000/admin/users/60f7b3b3b3b3b3b3b3b3b3b1 \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "Password": "newsecurepassword456"
+  }'
+```
+
+**Using JavaScript (Fetch API) - Update Password:**
+```javascript
+const token = localStorage.getItem('adminToken');
+fetch('http://localhost:3000/admin/users/60f7b3b3b3b3b3b3b3b3b3b1', {
+  method: 'PUT',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    Password: 'newpassword123',
+    Coins: 500,
+    WalletBalance: 1000,
+    DeviceId: 'new-device-id'
+  })
+})
+.then(response => response.json())
+.then(data => {
+  console.log('User updated:', data);
+  console.log('Updated password:', data.data.password);
+  console.log('Password changes:', data.data.changes.password);
+  console.log('All changes:', data.data.changes);
+})
+.catch(error => console.error('Error:', error));
+```
+
+---
+
+### POST /admin/users/:userId/block
+Block a user account. Blocked users cannot access the system.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**URL Parameters:**
+- `userId`: The ID of the user to block
+
+**Request Body (Optional):**
+```json
+{
+  "reason": "Violation of terms of service"
+}
+```
+
+**Note:**
+- `reason`: Optional reason for blocking the user (can be null)
+- User must not already be blocked
+- Blocked users will have `isBlocked: true` and `blockedAt` timestamp set
+
+**Response (Success - 200):**
+```json
+{
+  "message": "User blocked successfully",
+  "data": {
+    "userId": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "mobileNumber": "1234567890",
+    "isBlocked": true,
+    "blockedAt": "2024-01-18T22:30:00.000Z",
+    "blockedReason": "Violation of terms of service"
+  }
+}
+```
+
+**Error Responses:**
+
+#### 400 Bad Request - User Already Blocked
+```json
+{
+  "message": "User is already blocked"
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User not found"
+}
+```
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+**Example Usage:**
+
+**Using cURL:**
+```bash
+curl -X POST http://localhost:3000/admin/users/60f7b3b3b3b3b3b3b3b3b3b1/block \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reason": "Violation of terms of service"
+  }'
+```
+
+**Using JavaScript (Fetch API):**
+```javascript
+const token = localStorage.getItem('adminToken');
+fetch('http://localhost:3000/admin/users/60f7b3b3b3b3b3b3b3b3b3b1/block', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    reason: 'Violation of terms of service'
+  })
+})
+.then(response => response.json())
+.then(data => {
+  console.log('User blocked:', data);
+  console.log('Blocked at:', data.data.blockedAt);
+})
+.catch(error => console.error('Error:', error));
+```
+
+---
+
+### POST /admin/users/:userId/unblock
+Unblock a user account. Unblocked users can access the system again.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**URL Parameters:**
+- `userId`: The ID of the user to unblock
+
+**Response (Success - 200):**
+```json
+{
+  "message": "User unblocked successfully",
+  "data": {
+    "userId": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "mobileNumber": "1234567890",
+    "isBlocked": false,
+    "blockedAt": null,
+    "blockedReason": null
+  }
+}
+```
+
+**Error Responses:**
+
+#### 400 Bad Request - User Already Unblocked
+```json
+{
+  "message": "User is already unblocked"
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User not found"
+}
+```
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+**Example Usage:**
+
+**Using cURL:**
+```bash
+curl -X POST http://localhost:3000/admin/users/60f7b3b3b3b3b3b3b3b3b3b1/unblock \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+**Using JavaScript (Fetch API):**
+```javascript
+const token = localStorage.getItem('adminToken');
+fetch('http://localhost:3000/admin/users/60f7b3b3b3b3b3b3b3b3b3b1/unblock', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  console.log('User unblocked:', data);
+  console.log('Is blocked:', data.data.isBlocked);
+})
+.catch(error => console.error('Error:', error));
+```
+
+**Notes:**
+- Admin can block/unblock users to control access to the system
+- Blocked users have `isBlocked: true` and a `blockedAt` timestamp
+- Optional `reason` field can be provided when blocking a user
+- Unblocking clears the blocked status, timestamp, and reason
+- Blocked status is visible in all user endpoints (GET /admin/users, GET /admin/users/:userId, PUT /admin/users/:userId)
+- This endpoint requires admin authentication token
 
 ---
 
@@ -1204,6 +1796,10 @@ Authorization: Bearer <JWT_TOKEN>
 - User management APIs require JWT token authentication
 - Admin can view all users with pagination and search functionality
 - Admin can get detailed information about individual users including statistics and withdrawal history
+- Admin can edit user data including MobileNumber, Password, DeviceId, Coins, and WalletBalance
+- All user edit operations validate uniqueness constraints and data types
+- Password updates are automatically encrypted using crypto-js (AES encryption) and can be decrypted to retrieve the original password
+- Edit response includes before/after values for all changed fields
 
 ---
 
