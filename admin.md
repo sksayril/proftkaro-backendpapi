@@ -1895,6 +1895,102 @@ Authorization: Bearer <JWT_TOKEN>
 
 ---
 
+## Signup Bonus Settings APIs
+
+### POST /admin/signupbonus/settings
+Set signup bonus amount and reward type for new users.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "SignupBonusAmount": 100,
+  "RewardType": "Coins"
+}
+```
+
+OR for Wallet Balance:
+```json
+{
+  "SignupBonusAmount": 50,
+  "RewardType": "WalletBalance"
+}
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Signup bonus settings updated successfully",
+  "data": {
+    "_id": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "SignupBonusAmount": 100,
+    "RewardType": "Coins"
+  }
+}
+```
+
+**Response (Error - 400):**
+```json
+{
+  "message": "SignupBonusAmount is required"
+}
+```
+
+```json
+{
+  "message": "SignupBonusAmount must be a number greater than or equal to 0"
+}
+```
+
+```json
+{
+  "message": "RewardType must be either 'Coins' or 'WalletBalance'"
+}
+```
+
+**Validation Rules:**
+- `SignupBonusAmount` is required and must be a number >= 0
+- `RewardType` is optional (defaults to 'Coins') and must be either 'Coins' or 'WalletBalance'
+- Setting `SignupBonusAmount` to 0 disables signup bonus
+- All new users who signup will receive the configured signup bonus automatically
+
+---
+
+### GET /admin/signupbonus/settings
+Get current signup bonus settings.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Signup bonus settings retrieved successfully",
+  "data": {
+    "_id": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "SignupBonusAmount": 100,
+    "RewardType": "Coins"
+  }
+}
+```
+
+**Notes:**
+- Signup bonus settings APIs require JWT token authentication
+- Admin can set the signup bonus amount and whether it's given as Coins or WalletBalance
+- All new users automatically receive the signup bonus when they signup
+- Signup bonus is given to ALL new users (not just those with referral codes)
+- If signup bonus is set to 0, no bonus is given
+- Signup bonus is separate from referral rewards - users can receive both
+
+---
+
 ## Scratch Card Settings APIs
 
 ### POST /admin/scratchcard/settings
@@ -2005,6 +2101,139 @@ Authorization: Bearer <JWT_TOKEN>
 - Users can claim scratch card once per day
 - Weekly reset happens automatically every Monday
 - Each user can only claim one scratch card per day
+
+---
+
+## Scratch Card Daily Limit Settings APIs
+
+### POST /admin/scratchcard/dailylimit/settings
+Set scratch card daily limit settings. This is a separate feature from the regular scratch card settings.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "DailyLimit": 3,
+  "RewardAmount": 10.50,
+  "RewardCoins": 50,
+  "IsActive": true
+}
+```
+
+**Note:**
+- `DailyLimit`: Number of times a user can claim per day (required, minimum: 1)
+- `RewardAmount`: Wallet balance reward amount (optional, default: 0, minimum: 0)
+- `RewardCoins`: Coins reward amount (optional, default: 0, minimum: 0)
+- `IsActive`: Enable/disable the feature (optional, default: true)
+- At least one reward (`RewardAmount` or `RewardCoins`) must be greater than 0
+- Both rewards can be set simultaneously - both will be added to user's account
+- All fields are optional when updating existing settings (only provided fields will be updated)
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Scratch card daily limit settings updated successfully",
+  "data": {
+    "_id": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "DailyLimit": 3,
+    "RewardAmount": 10.50,
+    "RewardCoins": 50,
+    "IsActive": true,
+    "createdAt": "2024-01-18T20:00:00.000Z",
+    "updatedAt": "2024-01-18T20:00:00.000Z"
+  }
+}
+```
+
+**Error Responses:**
+
+#### 400 Bad Request - Invalid DailyLimit
+```json
+{
+  "message": "DailyLimit must be a number greater than or equal to 1"
+}
+```
+
+#### 400 Bad Request - Invalid RewardAmount
+```json
+{
+  "message": "RewardAmount must be a number greater than or equal to 0"
+}
+```
+
+#### 400 Bad Request - Invalid RewardCoins
+```json
+{
+  "message": "RewardCoins must be a number greater than or equal to 0"
+}
+```
+
+#### 400 Bad Request - No Rewards Set
+```json
+{
+  "message": "At least one reward (RewardAmount or RewardCoins) must be greater than 0"
+}
+```
+
+#### 400 Bad Request - Invalid IsActive
+```json
+{
+  "message": "IsActive must be a boolean value"
+}
+```
+
+---
+
+### GET /admin/scratchcard/dailylimit/settings
+Get current scratch card daily limit settings.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Scratch card daily limit settings retrieved successfully",
+  "data": {
+    "_id": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "DailyLimit": 3,
+    "RewardAmount": 10.50,
+    "RewardCoins": 50,
+    "IsActive": true,
+    "createdAt": "2024-01-18T20:00:00.000Z",
+    "updatedAt": "2024-01-18T20:00:00.000Z"
+  }
+}
+```
+
+**Note:** If no settings exist, default values will be returned:
+```json
+{
+  "DailyLimit": 1,
+  "RewardAmount": 0,
+  "RewardCoins": 0,
+  "IsActive": true
+}
+```
+
+---
+
+## Notes for Scratch Card Daily Limit System
+
+- Scratch card daily limit is a **separate feature** from the regular scratch card settings
+- Admin can set how many times per day a user can claim
+- Supports both wallet balance (`RewardAmount`) and coins (`RewardCoins`) rewards
+- Both rewards can be set simultaneously - both will be added when user claims
+- Daily limit resets at midnight (00:00:00) each day
+- Feature can be enabled/disabled via `IsActive` flag
+- Does not affect existing scratch card settings
 
 ---
 

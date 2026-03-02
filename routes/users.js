@@ -35,9 +35,13 @@ let withdrawalRequestModel = require('../models/withdrawalRequest.model')
 let appModel = require('../models/app.model')
 let appInstallationSubmissionModel = require('../models/appInstallationSubmission.model')
 let coinConversionSettingsModel = require('../models/coinConversionSettings.model')
+let coinConversionHistoryModel = require('../models/coinConversionHistory.model')
 let scratchCardSettingsModel = require('../models/scratchCardSettings.model')
 let scratchCardClaimModel = require('../models/scratchCardClaim.model')
+let scratchCardDailyLimitSettingsModel = require('../models/scratchCardDailyLimitSettings.model')
+let scratchCardDailyLimitClaimModel = require('../models/scratchCardDailyLimitClaim.model')
 let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
+let signupBonusSettingsModel = require('../models/signupBonusSettings.model')
 
 // Function to generate unique referCode (format: PRK08F9 - 3 letters + 2 digits + 1 letter)
 function generateReferCode() {
@@ -62,12 +66,26 @@ function generateReferCode() {
 // User Signup API
 router.post('/signup', async (req, res) => {
   try {
-    let { MobileNumber, Password, DeviceId, ReferralCode } = req.body
+    let { UserName, MobileNumber, Password, DeviceId, ReferralCode } = req.body
     
     // Validate required fields
-    if (!MobileNumber || !Password) {
+    if (!UserName || !MobileNumber || !Password) {
       return res.status(400).json({
-        message: "MobileNumber and Password are required"
+        message: "UserName, MobileNumber and Password are required"
+      })
+    }
+
+    // Validate UserName format
+    if (typeof UserName !== 'string' || UserName.trim().length === 0) {
+      return res.status(400).json({
+        message: "UserName must be a valid string"
+      })
+    }
+
+    // Validate UserName length (minimum 3 characters, maximum 30 characters)
+    if (UserName.trim().length < 3 || UserName.trim().length > 30) {
+      return res.status(400).json({
+        message: "UserName must be between 3 and 30 characters long"
       })
     }
 
@@ -97,6 +115,14 @@ router.post('/signup', async (req, res) => {
       console.error('Signup Error: Database not connected');
       return res.status(500).json({
         message: "Database connection error. Please try again later."
+      })
+    }
+
+    // Check if username already exists
+    let checkUsername = await userModel.findOne({ UserName: UserName.trim() })
+    if (checkUsername) {
+      return res.status(400).json({
+        message: "UserName already exists. Please choose a different username."
       })
     }
 
@@ -217,14 +243,45 @@ router.post('/signup', async (req, res) => {
       }
     }
 
+    // Get signup bonus settings
+    let signupBonusSettings = null;
+    try {
+      signupBonusSettings = await signupBonusSettingsModel.findOne()
+      if (!signupBonusSettings) {
+        // Use default values if not exists
+        signupBonusSettings = {
+          SignupBonusAmount: 0,
+          RewardType: 'Coins'
+        }
+      }
+    } catch (signupBonusError) {
+      // If settings fetch fails, use default values
+      console.warn('Signup Warning - Failed to fetch signup bonus settings, using defaults:', signupBonusError.message);
+      signupBonusSettings = {
+        SignupBonusAmount: 0,
+        RewardType: 'Coins'
+      }
+    }
+
     // Calculate initial rewards for new user
     let initialCoins = 0;
     let initialWalletBalance = 0;
+    
+    // Add signup bonus (given to all new users)
+    if (signupBonusSettings && signupBonusSettings.SignupBonusAmount > 0) {
+      if (signupBonusSettings.RewardType === 'Coins') {
+        initialCoins += signupBonusSettings.SignupBonusAmount;
+      } else {
+        initialWalletBalance += signupBonusSettings.SignupBonusAmount;
+      }
+    }
+    
+    // Add referral reward (only if referral code was used)
     if (referrer && referralSettings && referralSettings.RewardForNewUser > 0) {
       if (referralSettings.RewardType === 'Coins') {
-        initialCoins = referralSettings.RewardForNewUser;
+        initialCoins += referralSettings.RewardForNewUser;
       } else {
-        initialWalletBalance = referralSettings.RewardForNewUser;
+        initialWalletBalance += referralSettings.RewardForNewUser;
       }
     }
 
@@ -232,6 +289,7 @@ router.post('/signup', async (req, res) => {
     let User_data;
     try {
       User_data = await userModel.create({
+        UserName: UserName.trim(),
         MobileNumber: MobileNumber.trim(),
         Password: encryptedPassword,
         DeviceId: DeviceId.trim(),
@@ -247,9 +305,17 @@ router.post('/signup', async (req, res) => {
       // Handle duplicate key errors
       if (createError.code === 11000) {
         const field = Object.keys(createError.keyPattern)[0];
-        if (field === 'MobileNumber') {
+        if (field === 'UserName') {
+          return res.status(400).json({
+            message: "UserName already exists. Please choose a different username."
+          })
+        } else if (field === 'MobileNumber') {
           return res.status(400).json({
             message: "User with this MobileNumber already exists"
+          })
+        } else if (field === 'DeviceId') {
+          return res.status(400).json({
+            message: "DeviceId already registered. This device is already associated with another account."
           })
         } else if (field === 'ReferCode') {
           // Retry with new refer code (shouldn't happen, but handle it)
@@ -395,6 +461,7 @@ router.post('/login', async (req, res) => {
     return res.json({
       message: "Login Successful",
       data: {
+        UserName: user.UserName,
         MobileNumber: user.MobileNumber,
         DeviceId: user.DeviceId,
         ReferCode: user.ReferCode,
@@ -470,6 +537,7 @@ router.get('/profile', verifyToken, async (req, res) => {
       message: "User profile retrieved successfully",
       data: {
         userId: user._id,
+        userName: user.UserName,
         mobileNumber: user.MobileNumber,
         deviceId: user.DeviceId,
         referCode: user.ReferCode,
@@ -483,6 +551,54 @@ router.get('/profile', verifyToken, async (req, res) => {
         lastLoginTime: user.LastLoginTime,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
+      }
+    })
+
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get Signup Bonus Info API
+router.get('/signupbonus/info', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    
+    let user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    // Get signup bonus settings
+    let signupBonusSettings = null;
+    try {
+      signupBonusSettings = await signupBonusSettingsModel.findOne()
+      if (!signupBonusSettings) {
+        signupBonusSettings = {
+          SignupBonusAmount: 0,
+          RewardType: 'Coins'
+        }
+      }
+    } catch (settingsError) {
+      signupBonusSettings = {
+        SignupBonusAmount: 0,
+        RewardType: 'Coins'
+      }
+    }
+
+    return res.json({
+      message: "Signup bonus info retrieved successfully",
+      data: {
+        signupBonusAmount: signupBonusSettings.SignupBonusAmount,
+        rewardType: signupBonusSettings.RewardType,
+        description: signupBonusSettings.SignupBonusAmount > 0 
+          ? `New users receive ${signupBonusSettings.SignupBonusAmount} ${signupBonusSettings.RewardType === 'Coins' ? 'coins' : 'RS'} as signup bonus`
+          : "No signup bonus is currently configured"
       }
     })
 
@@ -704,6 +820,7 @@ router.get('/refercode', verifyToken, async (req, res) => {
     return res.json({
       message: "Refer code retrieved successfully",
       data: {
+        UserName: user.UserName,
         ReferCode: user.ReferCode,
         MobileNumber: user.MobileNumber,
         ReferralCount: referralCount,
@@ -1819,6 +1936,14 @@ router.post('/coinconversion/convert', verifyToken, async (req, res) => {
     user.WalletBalance = (user.WalletBalance || 0) + rupeesToAdd
     await user.save()
 
+    // Record conversion history
+    await coinConversionHistoryModel.create({
+      UserId: userId,
+      CoinsConverted: Coins,
+      RupeesAdded: rupeesToAdd,
+      ConversionRate: settings.CoinsPerRupee
+    })
+
     return res.json({
       message: "Coins converted to RS successfully",
       data: {
@@ -1832,6 +1957,181 @@ router.post('/coinconversion/convert', verifyToken, async (req, res) => {
 
   } catch (err) {
     console.error('Convert Coins to RS - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== USER WALLET & TASK HISTORY API ====================
+
+// Get combined history of user's earning and wallet-related activities
+router.get('/wallethistory', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { page = 1, limit = 50, type } = req.query
+
+    const pageNum = parseInt(page) || 1
+    const limitNum = parseInt(limit) || 50
+
+    let user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    // Helper to optionally filter by type later
+    const typeFilter = type ? String(type) : null
+
+    // Scratch card normal claims
+    const scratchClaims = await scratchCardClaimModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200)
+    const scratchEvents = scratchClaims.map(c => ({
+      type: 'SCRATCH_CARD',
+      sourceId: c._id,
+      title: `Scratch Card - ${c.Day}`,
+      coinsChange: c.RewardType === 'Coins' ? c.RewardAmount : 0,
+      walletChange: c.RewardType === 'WalletBalance' ? c.RewardAmount : 0,
+      status: 'Completed',
+      meta: {
+        day: c.Day,
+        rewardType: c.RewardType,
+        weekStartDate: c.WeekStartDate
+      },
+      createdAt: c.createdAt
+    }))
+
+    // Scratch card daily limit claims
+    const scratchLimitClaims = await scratchCardDailyLimitClaimModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200)
+    const scratchLimitEvents = scratchLimitClaims.map(c => ({
+      type: 'SCRATCH_CARD_DAILY_LIMIT',
+      sourceId: c._id,
+      title: 'Scratch Card Daily Limit',
+      coinsChange: c.RewardCoins || 0,
+      walletChange: c.RewardAmount || 0,
+      status: 'Completed',
+      meta: {},
+      createdAt: c.createdAt
+    }))
+
+    // Captcha solves
+    const captchaSolves = await captchaSolveModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200)
+    const captchaEvents = captchaSolves.map(c => ({
+      type: 'CAPTCHA',
+      sourceId: c._id,
+      title: 'Captcha Solve',
+      coinsChange: c.RewardType === 'Coins' ? c.RewardAmount : 0,
+      walletChange: c.RewardType === 'WalletBalance' ? c.RewardAmount : 0,
+      status: 'Completed',
+      meta: {
+        rewardType: c.RewardType
+      },
+      createdAt: c.createdAt
+    }))
+
+    // App installation rewards (approved submissions only)
+    const appSubs = await appInstallationSubmissionModel.find({
+      UserId: userId,
+      Status: 'Approved'
+    }).populate('AppId', 'AppName RewardCoins').sort({ updatedAt: -1 }).limit(200)
+
+    const appEvents = appSubs.map(s => ({
+      type: 'APP_INSTALL',
+      sourceId: s._id,
+      title: `App Install - ${s.AppId?.AppName || 'App'}`,
+      coinsChange: s.AppId?.RewardCoins || 0,
+      walletChange: 0,
+      status: s.Status,
+      meta: {
+        appId: s.AppId?._id,
+        appName: s.AppId?.AppName
+      },
+      createdAt: s.updatedAt || s.createdAt
+    }))
+
+    // Withdrawal requests
+    const withdrawals = await withdrawalRequestModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200)
+    const withdrawalEvents = withdrawals.map(w => ({
+      type: 'WITHDRAWAL',
+      sourceId: w._id,
+      title: `Withdrawal - ${w.PaymentMethod}`,
+      coinsChange: 0,
+      walletChange: w.Status === 'Rejected' ? 0 : -w.Amount, // amount deducted on request
+      status: w.Status,
+      meta: {
+        paymentMethod: w.PaymentMethod,
+        amount: w.Amount
+      },
+      createdAt: w.createdAt
+    }))
+
+    // Coin conversions
+    const conversions = await coinConversionHistoryModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200)
+    const conversionEvents = conversions.map(c => ({
+      type: 'COIN_CONVERSION',
+      sourceId: c._id,
+      title: 'Coin Conversion',
+      coinsChange: -c.CoinsConverted,
+      walletChange: c.RupeesAdded,
+      status: 'Completed',
+      meta: {
+        conversionRate: c.ConversionRate
+      },
+      createdAt: c.createdAt
+    }))
+
+    // Combine all events
+    let allEvents = [
+      ...scratchEvents,
+      ...scratchLimitEvents,
+      ...captchaEvents,
+      ...appEvents,
+      ...withdrawalEvents,
+      ...conversionEvents
+    ]
+
+    // Optional type filtering
+    if (typeFilter) {
+      const typeUpper = typeFilter.toUpperCase()
+      allEvents = allEvents.filter(e => e.type === typeUpper)
+    }
+
+    // Sort by createdAt desc
+    allEvents.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+
+    const totalEvents = allEvents.length
+    const start = (pageNum - 1) * limitNum
+    const end = start + limitNum
+    const pageEvents = allEvents.slice(start, end)
+
+    // Aggregate totals
+    const totalCoinsChange = allEvents.reduce((sum, e) => sum + (e.coinsChange || 0), 0)
+    const totalWalletChange = allEvents.reduce((sum, e) => sum + (e.walletChange || 0), 0)
+
+    return res.json({
+      message: "Wallet & task history retrieved successfully",
+      data: {
+        events: pageEvents,
+        pagination: {
+          currentPage: pageNum,
+          totalPages: Math.ceil(totalEvents / limitNum) || 1,
+          totalEvents: totalEvents,
+          limit: limitNum,
+          hasNextPage: pageNum < Math.ceil(totalEvents / limitNum),
+          hasPrevPage: pageNum > 1
+        },
+        totals: {
+          totalCoinsChange: totalCoinsChange,
+          totalWalletChange: totalWalletChange,
+          currentCoins: user.Coins || 0,
+          currentWalletBalance: user.WalletBalance || 0
+        }
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Wallet History - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
@@ -2103,6 +2403,214 @@ router.get('/scratchcard/history', verifyToken, async (req, res) => {
   }
 })
 
+// ==================== SCRATCH CARD DAILY LIMIT APIs ====================
+
+// Helper function to get today's date at midnight (for daily limit tracking)
+function getTodayDate() {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return today
+}
+
+// Get Scratch Card Daily Limit Info API
+router.get('/scratchcard/dailylimit', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    
+    let user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    // Get daily limit settings
+    let settings = await scratchCardDailyLimitSettingsModel.findOne()
+    if (!settings) {
+      return res.json({
+        message: "Scratch card daily limit info retrieved successfully",
+        data: {
+          isActive: false,
+          dailyLimit: 1,
+          rewardAmount: 0,
+          rewardCoins: 0,
+          claimsToday: 0,
+          remainingClaims: 1,
+          canClaim: false
+        }
+      })
+    }
+
+    if (!settings.IsActive) {
+      return res.json({
+        message: "Scratch card daily limit info retrieved successfully",
+        data: {
+          isActive: false,
+          dailyLimit: settings.DailyLimit,
+          rewardAmount: settings.RewardAmount,
+          rewardCoins: settings.RewardCoins,
+          claimsToday: 0,
+          remainingClaims: 0,
+          canClaim: false
+        }
+      })
+    }
+
+    // Get today's date at midnight
+    const todayDate = getTodayDate()
+
+    // Count how many times user has claimed today
+    const claimsToday = await scratchCardDailyLimitClaimModel.countDocuments({
+      UserId: userId,
+      ClaimDate: todayDate
+    })
+
+    const remainingClaims = Math.max(0, settings.DailyLimit - claimsToday)
+    const canClaim = remainingClaims > 0 && (settings.RewardAmount > 0 || settings.RewardCoins > 0)
+
+    return res.json({
+      message: "Scratch card daily limit info retrieved successfully",
+      data: {
+        isActive: settings.IsActive,
+        dailyLimit: settings.DailyLimit,
+        rewardAmount: settings.RewardAmount,
+        rewardCoins: settings.RewardCoins,
+        claimsToday: claimsToday,
+        remainingClaims: remainingClaims,
+        canClaim: canClaim
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Scratch Card Daily Limit Info - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Claim Scratch Card Daily Limit API
+router.post('/scratchcard/dailylimit/claim', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    
+    let user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User Not Found"
+      })
+    }
+
+    // Get daily limit settings
+    let settings = await scratchCardDailyLimitSettingsModel.findOne()
+    if (!settings) {
+      return res.status(400).json({
+        message: "Scratch card daily limit settings not configured"
+      })
+    }
+
+    if (!settings.IsActive) {
+      return res.status(400).json({
+        message: "Scratch card daily limit feature is currently disabled"
+      })
+    }
+
+    // Check if rewards are set
+    if (settings.RewardAmount === 0 && settings.RewardCoins === 0) {
+      return res.status(400).json({
+        message: "No rewards configured for scratch card daily limit"
+      })
+    }
+
+    // Get today's date at midnight
+    const todayDate = getTodayDate()
+
+    // Count how many times user has claimed today
+    const claimsToday = await scratchCardDailyLimitClaimModel.countDocuments({
+      UserId: userId,
+      ClaimDate: todayDate
+    })
+
+    // Check if user has reached daily limit
+    if (claimsToday >= settings.DailyLimit) {
+      return res.status(400).json({
+        message: `Daily limit reached. You have already claimed ${claimsToday} time(s) today. Maximum allowed: ${settings.DailyLimit}`
+      })
+    }
+
+    // Create claim record (use atomic operation to prevent race conditions)
+    let claimRecord
+    try {
+      claimRecord = await scratchCardDailyLimitClaimModel.create({
+        UserId: userId,
+        ClaimDate: todayDate,
+        RewardAmount: settings.RewardAmount,
+        RewardCoins: settings.RewardCoins
+      })
+    } catch (createError) {
+      // If there's a duplicate or constraint error, check again
+      const newClaimsToday = await scratchCardDailyLimitClaimModel.countDocuments({
+        UserId: userId,
+        ClaimDate: todayDate
+      })
+      
+      if (newClaimsToday >= settings.DailyLimit) {
+        return res.status(400).json({
+          message: `Daily limit reached. You have already claimed ${newClaimsToday} time(s) today. Maximum allowed: ${settings.DailyLimit}`
+        })
+      }
+      throw createError
+    }
+
+    // Add rewards to user
+    let coinsAdded = 0
+    let amountAdded = 0
+
+    if (settings.RewardCoins > 0) {
+      user.Coins = (user.Coins || 0) + settings.RewardCoins
+      coinsAdded = settings.RewardCoins
+    }
+
+    if (settings.RewardAmount > 0) {
+      user.WalletBalance = (user.WalletBalance || 0) + settings.RewardAmount
+      amountAdded = settings.RewardAmount
+    }
+
+    await user.save()
+
+    // Refresh user data
+    user = await userModel.findById(userId)
+
+    // Get updated claim count
+    const updatedClaimsToday = await scratchCardDailyLimitClaimModel.countDocuments({
+      UserId: userId,
+      ClaimDate: todayDate
+    })
+
+    return res.json({
+      message: "Scratch card daily limit claimed successfully",
+      data: {
+        claimId: claimRecord._id,
+        coinsAdded: coinsAdded,
+        amountAdded: amountAdded,
+        currentCoins: user.Coins || 0,
+        currentWalletBalance: user.WalletBalance || 0,
+        claimsToday: updatedClaimsToday,
+        remainingClaims: Math.max(0, settings.DailyLimit - updatedClaimsToday),
+        claimedAt: claimRecord.createdAt
+      }
+    })
+
+  } catch (err) {
+    console.error('Claim Scratch Card Daily Limit - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
 // ==================== DAILY SPIN APIs ====================
 
 // Get Daily Spin Status API
@@ -2319,11 +2827,12 @@ router.get('/leaderboard', verifyToken, async (req, res) => {
       .sort(sortCriteria)
       .skip(skip)
       .limit(limitNum)
-      .select('ReferCode Coins WalletBalance')
+      .select('UserName ReferCode Coins WalletBalance')
 
-    // Format leaderboard data - only rank, referCode, coins, walletBalance
+    // Format leaderboard data - rank, userName, referCode, coins, walletBalance
     const leaderboard = leaderboardUsers.map((user, index) => ({
       rank: skip + index + 1,
+      userName: user.UserName,
       referCode: user.ReferCode,
       coins: user.Coins || 0,
       walletBalance: user.WalletBalance || 0
@@ -2367,9 +2876,10 @@ router.get('/leaderboard', verifyToken, async (req, res) => {
       userPosition = currentUserInLeaderboard.rank
     }
 
-    // Get current user's stats - only rank, referCode, coins, walletBalance
+    // Get current user's stats - rank, userName, referCode, coins, walletBalance
     const currentUserStats = {
       rank: userRank,
+      userName: currentUser.UserName,
       referCode: currentUser.ReferCode,
       coins: currentUser.Coins || 0,
       walletBalance: currentUser.WalletBalance || 0
@@ -2427,11 +2937,12 @@ router.get('/leaderboard/top', async (req, res) => {
     const topUsers = await userModel.find({ IsBlocked: { $ne: true } })
       .sort(sortCriteria)
       .limit(limitNum)
-      .select('ReferCode Coins WalletBalance')
+      .select('UserName ReferCode Coins WalletBalance')
 
-    // Format leaderboard data - only rank, referCode, coins, walletBalance
+    // Format leaderboard data - rank, userName, referCode, coins, walletBalance
     const leaderboard = topUsers.map((user, index) => ({
       rank: index + 1,
+      userName: user.UserName,
       referCode: user.ReferCode,
       coins: user.Coins || 0,
       walletBalance: user.WalletBalance || 0

@@ -7,6 +7,127 @@ This document describes the User APIs available in the application.
 http://localhost:3100/users
 ```
 
+## Public Base URL
+```
+http://localhost:3100
+```
+
+---
+
+## Referral Link Redirect API (Public - No Authentication Required)
+
+### GET /refer/:referCode
+Redirect users to the ProfitKaro app using a referral code. This endpoint validates the referral code and redirects to the app (if installed) or Play Store.
+
+**Endpoint:**
+```
+GET /refer/:referCode
+```
+
+**Alternative Format (Query Parameter):**
+```
+GET /refer?code=VYD62W
+GET /refer?refer=VYD62W
+```
+
+**Example URLs:**
+- `https://apiprofit.seotube.in/refer/VYD62W`
+- `https://apiprofit.seotube.in/refer?code=VYD62W`
+- `https://apiprofit.seotube.in/refer?refer=VYD62W`
+
+**How It Works:**
+1. Validates the referral code exists in the database
+2. Returns an HTML page with JavaScript that:
+   - Tries to open the Android app using Intent URL: `intent://refer?code=VYD62W#Intent;scheme=profitkaro;package=com.profitkaro;S.refer=VYD62W;end`
+   - Falls back to custom scheme: `profitkaro://refer?code=VYD62W`
+   - Finally redirects to Play Store: `https://play.google.com/store/apps/details?id=com.profitkaro&referrer=VYD62W`
+
+**Success Response (200 OK):**
+Returns an HTML page that automatically redirects to the app or Play Store.
+
+**Error Responses:**
+
+#### 400 Bad Request - Invalid Referral Code
+```html
+<html>
+  <head><title>Invalid Referral Link</title></head>
+  <body>
+    <h1>Invalid Referral Link</h1>
+    <p>The referral code is missing or invalid.</p>
+  </body>
+</html>
+```
+
+#### 404 Not Found - Referral Code Not Found
+```html
+<html>
+  <head><title>Referral Code Not Found</title></head>
+  <body>
+    <h1>Referral Code Not Found</h1>
+    <p>The referral code "VYD62W" does not exist.</p>
+    <p><a href="https://play.google.com/store/apps/details?id=com.profitkaro">Download ProfitKaro App</a></p>
+  </body>
+</html>
+```
+
+**Notes:**
+- This is a **public endpoint** - no authentication required
+- Validates referral code exists before redirecting
+- Works on Android devices (tries app first, then Play Store)
+- On iOS/Desktop, redirects directly to Play Store
+- The referral code is passed to the app via deep link parameters
+- App package name: `com.profitkaro`
+- Custom scheme: `profitkaro://`
+
+**Example Usage:**
+
+#### Using cURL
+```bash
+# Path-based format
+curl -L "http://localhost:3100/refer/VYD62W"
+
+# Query parameter format
+curl -L "http://localhost:3100/refer?code=VYD62W"
+```
+
+#### Using Browser
+Simply open the URL in a browser:
+```
+https://apiprofit.seotube.in/refer/VYD62W
+```
+
+#### Using JavaScript (for web integration)
+```javascript
+// Redirect user to referral link
+const referCode = 'VYD62W';
+window.location.href = `https://apiprofit.seotube.in/refer/${referCode}`;
+
+// Or open in new window
+window.open(`https://apiprofit.seotube.in/refer/${referCode}`, '_blank');
+```
+
+**App Deep Link Configuration:**
+
+For the Android app to receive the referral code, configure these in `AndroidManifest.xml`:
+
+```xml
+<intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    
+    <!-- Custom scheme -->
+    <data android:scheme="profitkaro" android:host="refer" />
+    
+    <!-- Intent URL support -->
+    <data android:scheme="intent" />
+</intent-filter>
+```
+
+The app should read the referral code from the intent:
+- Intent URL: `S.refer` parameter
+- Custom scheme: `code` query parameter
+
 ---
 
 ## 1. User Signup
@@ -23,6 +144,7 @@ POST /users/signup
 **Required Fields:**
 ```json
 {
+  "UserName": "john_doe",
   "MobileNumber": "9876543210",
   "Password": "yourpassword123",
   "DeviceId": "device123456"
@@ -32,6 +154,7 @@ POST /users/signup
 **With Optional Referral Code:**
 ```json
 {
+  "UserName": "john_doe",
   "MobileNumber": "9876543210",
   "Password": "yourpassword123",
   "DeviceId": "device123456",
@@ -40,7 +163,8 @@ POST /users/signup
 ```
 
 **Note:** 
-- `MobileNumber`, `Password`, and `DeviceId` are **required** fields.
+- `UserName`, `MobileNumber`, `Password`, and `DeviceId` are **required** fields.
+- `UserName` must be unique and between 3-30 characters long.
 - `DeviceId` must be unique - each device can only be registered to one account.
 - If a `DeviceId` is already registered, signup will be rejected.
 - `ReferralCode` is **optional**. If provided, it must be a valid referral code from another existing user.
@@ -58,6 +182,7 @@ Content-Type: application/json
   "message": "User Created Successfully",
   "data": {
     "_id": "507f1f77bcf86cd799439011",
+    "UserName": "john_doe",
     "MobileNumber": "9876543210",
     "DeviceId": "device123456",
     "ReferCode": "PRK08F9",
@@ -79,8 +204,9 @@ Content-Type: application/json
 - `SignupTime` is automatically recorded when the user signs up.
 - If a ReferralCode is provided during signup, it will be validated and stored in the `ReferredBy` field. If no referral code is provided, `ReferredBy` will be `null`.
 - **Referral code is permanent**: Once set during signup, the referral code (ReferredBy) cannot be removed or changed. This ensures referral tracking integrity.
-- **Referral Rewards**: If a valid referral code is used during signup, rewards are automatically calculated and distributed:
-  - The new user receives `RewardForNewUser` (configured by admin)
+- **Signup Bonus**: All new users automatically receive a signup bonus (configured by admin). The bonus can be in Coins or WalletBalance (RS) based on admin settings.
+- **Referral Rewards**: If a valid referral code is used during signup, additional rewards are automatically calculated and distributed:
+  - The new user receives `RewardForNewUser` (configured by admin) in addition to the signup bonus
   - The referrer (user whose code was used) receives `RewardForReferrer` (configured by admin)
   - Rewards are added to Coins or WalletBalance based on admin settings
 
@@ -97,6 +223,20 @@ Content-Type: application/json
 ```json
 {
   "message": "User with this MobileNumber already exists"
+}
+```
+
+#### 400 Bad Request - UserName Already Exists
+```json
+{
+  "message": "UserName already exists. Please choose a different username."
+}
+```
+
+#### 400 Bad Request - Invalid UserName
+```json
+{
+  "message": "UserName must be between 3 and 30 characters long"
 }
 ```
 
@@ -165,6 +305,7 @@ Content-Type: application/json
 {
   "message": "Login Successful",
   "data": {
+    "UserName": "john_doe",
     "MobileNumber": "9876543210",
     "DeviceId": "device123456",
     "ReferCode": "PRK08F9",
@@ -265,28 +406,29 @@ Content-Type: application/json
 ```json
 {
   "message": "User profile retrieved successfully",
-  "data": {
-    "userId": "60f7b3b3b3b3b3b3b3b3b3b1",
-    "mobileNumber": "9876543210",
-    "deviceId": "device123",
-    "referCode": "PRK08F9",
-    "coins": 100,
-    "walletBalance": 500.50,
-    "referredBy": null,
-    "signupTime": "2024-01-18T20:00:00.000Z",
-    "lastLoginTime": "2024-01-18T22:00:00.000Z",
-    "isBlocked": false,
-    "blockedAt": null,
-    "blockedReason": null,
-    "createdAt": "2024-01-18T20:00:00.000Z",
-    "updatedAt": "2024-01-18T20:00:00.000Z"
-  }
+      "data": {
+        "userId": "60f7b3b3b3b3b3b3b3b3b3b1",
+        "userName": "john_doe",
+        "mobileNumber": "9876543210",
+        "deviceId": "device123",
+        "referCode": "PRK08F9",
+        "coins": 100,
+        "walletBalance": 500.50,
+        "referredBy": null,
+        "signupTime": "2024-01-18T20:00:00.000Z",
+        "lastLoginTime": "2024-01-18T22:00:00.000Z",
+        "isBlocked": false,
+        "blockedAt": null,
+        "blockedReason": null,
+        "createdAt": "2024-01-18T20:00:00.000Z",
+        "updatedAt": "2024-01-18T20:00:00.000Z"
+      }
 }
 ```
 
 **Note:** 
 - Returns complete user profile information
-- Includes mobile number, device ID, referral code, coins, wallet balance
+- Includes username, mobile number, device ID, referral code, coins, wallet balance
 - Shows if user was referred by someone (referredBy field)
 - Includes signup time (when user registered) and last login time (most recent login timestamp)
 - Includes account creation and update timestamps
@@ -326,7 +468,73 @@ Content-Type: application/json
 
 ---
 
-## 4. Get User Wallet Balance and Coins
+## 4. Get Signup Bonus Info
+
+Retrieve information about the signup bonus configuration.
+
+### Endpoint
+```
+GET /users/signupbonus/info
+```
+
+### Request Headers
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+### Success Response (200 OK)
+```json
+{
+  "message": "Signup bonus info retrieved successfully",
+  "data": {
+    "signupBonusAmount": 100,
+    "rewardType": "Coins",
+    "description": "New users receive 100 coins as signup bonus"
+  }
+}
+```
+
+**Note:** 
+- Returns the current signup bonus configuration set by admin
+- Shows the bonus amount and whether it's given as Coins or WalletBalance (RS)
+- If signup bonus is disabled (amount = 0), description will indicate no bonus is configured
+- This information is useful for displaying signup incentives to potential new users
+
+### Error Responses
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 401 Unauthorized - Invalid Token
+```json
+{
+  "message": "Invalid or expired token"
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User Not Found"
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+---
+
+## 5. Get User Wallet Balance and Coins
 
 Retrieve the wallet balance and coins for the authenticated user.
 
@@ -386,7 +594,109 @@ Content-Type: application/json
 
 ---
 
-## 5. Add Amount (RS) to Wallet Balance
+## 6. Add Coins to User Wallet
+
+Add coins to the authenticated user's wallet.
+
+### Endpoint
+```
+POST /users/addcoins
+```
+
+### Request Headers
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+### Request Body
+```json
+{
+  "Coins": 100
+}
+```
+
+**Note:** 
+- `Coins` is **required** and must be a positive number greater than 0
+- The coins will be added to the user's current coin balance
+- User must be authenticated with a valid JWT token
+
+### Success Response (200 OK)
+```json
+{
+  "message": "Coins added successfully",
+  "data": {
+    "coinsAdded": 100,
+    "previousCoins": 50,
+    "currentCoins": 150,
+    "walletBalance": 500.50,
+    "MobileNumber": "9876543210"
+  }
+}
+```
+
+**Note:** 
+- `coinsAdded` shows the amount of coins that were added
+- `previousCoins` shows the coin balance before adding
+- `currentCoins` shows the updated coin balance after adding
+- `walletBalance` shows the current wallet balance (unchanged)
+- `MobileNumber` shows the user's mobile number
+
+### Error Responses
+
+#### 400 Bad Request - Missing Coins
+```json
+{
+  "message": "Coins is required"
+}
+```
+
+#### 400 Bad Request - Invalid Coins Value
+```json
+{
+  "message": "Coins must be a valid number"
+}
+```
+
+#### 400 Bad Request - Invalid Coins Amount
+```json
+{
+  "message": "Coins must be greater than 0"
+}
+```
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 401 Unauthorized - Invalid Token
+```json
+{
+  "message": "Invalid or expired token"
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User Not Found"
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+---
+
+## 7. Add Amount (RS) to Wallet Balance
 
 Add **RS amount** to the authenticated user's `WalletBalance`.
 
@@ -481,7 +791,7 @@ Content-Type: application/json
 
 ---
 
-## 6. Get User Refer Code
+## 8. Get User Refer Code
 
 Retrieve the refer code for the authenticated user.
 
@@ -501,6 +811,7 @@ Content-Type: application/json
 {
   "message": "Refer code retrieved successfully",
   "data": {
+    "UserName": "john_doe",
     "ReferCode": "PRK08F9",
     "MobileNumber": "9876543210",
     "ReferralCount": 5,
@@ -512,6 +823,7 @@ Content-Type: application/json
 ```
 
 **Note:** 
+- `UserName` is the user's username
 - `ReferCode` is the user's unique referral code
 - `ReferralCount` shows how many users have joined using this referral code (users who have `ReferredBy` matching this `ReferCode`)
 - `TotalEarnings` shows the total amount earned from all referrals (ReferralCount × RewardPerReferral)
@@ -551,7 +863,7 @@ Content-Type: application/json
 
 ---
 
-## 6. Get Captcha
+## 9. Get Captcha
 
 Get a captcha challenge to solve.
 
@@ -605,7 +917,7 @@ Content-Type: application/json
 
 ---
 
-## 8. Solve Captcha
+## 10. Solve Captcha
 
 Solve a captcha and earn rewards (Coins or WalletBalance).
 
@@ -703,6 +1015,7 @@ Content-Type: application/json
 curl -X POST http://localhost:3100/users/signup \
   -H "Content-Type: application/json" \
   -d '{
+    "UserName": "john_doe",
     "MobileNumber": "9876543210",
     "Password": "yourpassword123",
     "DeviceId": "device123456"
@@ -714,6 +1027,7 @@ curl -X POST http://localhost:3100/users/signup \
 curl -X POST http://localhost:3100/users/signup \
   -H "Content-Type: application/json" \
   -d '{
+    "UserName": "john_doe",
     "MobileNumber": "9876543210",
     "Password": "yourpassword123",
     "DeviceId": "device123456",
@@ -737,6 +1051,16 @@ curl -X POST http://localhost:3100/users/login \
 curl -X GET http://localhost:3100/users/wallet \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json"
+```
+
+#### Add Coins to Wallet
+```bash
+curl -X POST http://localhost:3100/users/addcoins \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "Coins": 100
+  }'
 ```
 
 #### Get Refer Code
@@ -809,6 +1133,7 @@ fetch('http://localhost:3100/users/signup', {
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({
+    UserName: 'john_doe',
     MobileNumber: '9876543210',
     Password: 'yourpassword123',
     DeviceId: 'device123456',
@@ -864,6 +1189,30 @@ fetch('http://localhost:3100/users/wallet', {
   console.log('Wallet details:', data);
   console.log('Coins:', data.data.Coins);
   console.log('Wallet Balance:', data.data.WalletBalance);
+})
+.catch(error => console.error('Error:', error));
+```
+
+#### Add Coins to Wallet
+```javascript
+const token = localStorage.getItem('token');
+fetch('http://localhost:3100/users/addcoins', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    Coins: 100
+  })
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Coins added:', data.message);
+  console.log('Coins Added:', data.data.coinsAdded);
+  console.log('Previous Coins:', data.data.previousCoins);
+  console.log('Current Coins:', data.data.currentCoins);
+  console.log('Wallet Balance:', data.data.walletBalance);
 })
 .catch(error => console.error('Error:', error));
 ```
@@ -1016,8 +1365,9 @@ fetch('http://localhost:3100/protected-route', {
 ## User Model Fields
 
 ### Required Fields
+- **UserName**: User's username (must be unique, 3-30 characters long)
 - **MobileNumber**: User's mobile phone number (must be unique)
-- **Password**: User's password (will be hashed and stored securely)
+- **Password**: User's password (will be encrypted and stored securely)
 - **DeviceId**: Device identifier (required, must be unique - one device per user)
 
 ### Auto-Generated Fields
@@ -1045,14 +1395,15 @@ fetch('http://localhost:3100/protected-route', {
 3. **DeviceId**: Required field, must be unique. Each device can only be registered to one account. Cannot signup with a DeviceId that is already registered.
 4. **DeviceId Login Restriction**: Users can only login from their registered device. DeviceId must match the one used during signup.
 5. **ReferCode Uniqueness**: Each refer code is automatically generated and guaranteed to be unique.
-6. **Required Fields**: MobileNumber, Password, and DeviceId are mandatory for signup.
+6. **Required Fields**: UserName, MobileNumber, Password, and DeviceId are mandatory for signup.
+7. **UserName Requirements**: UserName must be unique and between 3-30 characters long.
 7. **Referral Code Permanence**: Referral code (ReferredBy) is optional during signup, but once set, it cannot be removed or changed. If not provided during signup, it remains null permanently.
 8. **SignupTime Tracking**: Automatically recorded when user signs up.
 9. **LastLoginTime Tracking**: Automatically updated on each successful login.
 
 ---
 
-## 9. Get All Daily Bonuses
+## 11. Get All Daily Bonuses
 
 Retrieve all daily bonuses with claim status for the current week.
 
@@ -1167,7 +1518,7 @@ Content-Type: application/json
 
 ---
 
-## 10. Claim Daily Bonus
+## 12. Claim Daily Bonus
 
 Claim the daily bonus for the current day.
 
@@ -1583,18 +1934,21 @@ GET /users/leaderboard?type=wallet&limit=50&page=1
     "leaderboard": [
       {
         "rank": 1,
+        "userName": "john_doe",
         "referCode": "PRK08F9",
         "coins": 5000,
         "walletBalance": 10000
       },
       {
         "rank": 2,
+        "userName": "jane_smith",
         "referCode": "PRK12A5",
         "coins": 3000,
         "walletBalance": 8000
       },
       {
         "rank": 3,
+        "userName": "bob_wilson",
         "referCode": "PRK45M2",
         "coins": 2000,
         "walletBalance": 6000
@@ -1602,6 +1956,7 @@ GET /users/leaderboard?type=wallet&limit=50&page=1
     ],
     "currentUser": {
       "rank": 25,
+      "userName": "alice_brown",
       "referCode": "PRK45M2",
       "coins": 500,
       "walletBalance": 1000
@@ -1621,10 +1976,10 @@ GET /users/leaderboard?type=wallet&limit=50&page=1
 ```
 
 **Note:**
-- Leaderboard returns only: `rank`, `referCode`, `coins`, and `walletBalance`
+- Leaderboard returns: `rank`, `userName`, `referCode`, `coins`, and `walletBalance`
 - Leaderboard is sorted by wallet balance (descending) by default, or by coins if `type=coins`
 - Blocked users are excluded from the leaderboard
-- Shows current user's rank and position with same fields (rank, referCode, coins, walletBalance)
+- Shows current user's rank and position with same fields (rank, userName, referCode, coins, walletBalance)
 - Includes pagination for large leaderboards
 - `userInCurrentPage` indicates if current user appears in the current page results
 
@@ -1718,18 +2073,21 @@ GET /users/leaderboard/top?type=wallet&limit=20
     "leaderboard": [
       {
         "rank": 1,
+        "userName": "john_doe",
         "referCode": "PRK08F9",
         "coins": 5000,
         "walletBalance": 10000
       },
       {
         "rank": 2,
+        "userName": "jane_smith",
         "referCode": "PRK12A5",
         "coins": 3000,
         "walletBalance": 8000
       },
       {
         "rank": 3,
+        "userName": "bob_wilson",
         "referCode": "PRK45M2",
         "coins": 2000,
         "walletBalance": 6000
@@ -1743,7 +2101,7 @@ GET /users/leaderboard/top?type=wallet&limit=20
 **Note:**
 - This is a public endpoint - no authentication required
 - Shows only top users (limited by `limit` parameter)
-- Returns only: `rank`, `referCode`, `coins`, and `walletBalance`
+- Returns: `rank`, `userName`, `referCode`, `coins`, and `walletBalance`
 - Blocked users are excluded from the leaderboard
 - Leaderboard is sorted by wallet balance (descending) by default, or by coins if `type=coins`
 
@@ -1783,12 +2141,12 @@ fetch('http://localhost:3100/users/leaderboard/top?type=wallet&limit=20', {
 
 **Notes:**
 - Leaderboard APIs show users ranked by wallet balance or coins
-- **Response Format**: Both endpoints return only `rank`, `referCode`, `coins`, and `walletBalance`
+- **Response Format**: Both endpoints return `rank`, `userName`, `referCode`, `coins`, and `walletBalance`
 - Blocked users are automatically excluded from leaderboards
 - Protected leaderboard endpoint (`/users/leaderboard`) shows current user's rank and position
 - Public leaderboard endpoint (`/users/leaderboard/top`) shows top users only
 - Leaderboard supports pagination for large user bases
-- Current user's rank is calculated and shown in protected endpoint with same fields (rank, referCode, coins, walletBalance)
+- Current user's rank is calculated and shown in protected endpoint with same fields (rank, userName, referCode, coins, walletBalance)
 - Sorting: Wallet balance leaderboard sorts by WalletBalance (desc), then Coins (desc)
 - Sorting: Coins leaderboard sorts by Coins (desc), then WalletBalance (desc)
 
@@ -1797,8 +2155,8 @@ fetch('http://localhost:3100/users/leaderboard/top?type=wallet&limit=20', {
 ## Notes
 
 - All endpoints require `Content-Type: application/json` header
+- UserName, MobileNumber, Password, and DeviceId are required for signup
 - MobileNumber, Password, and DeviceId are required for login
-- MobileNumber, Password, and DeviceId are required for signup
 - DeviceId must be unique - one device can only be registered to one account
 - Users can only login from their registered device - DeviceId must match during login
 - SignupTime is automatically recorded when user signs up
@@ -2523,6 +2881,310 @@ fetch('http://localhost:3100/users/coinconversion/convert', {
 - Conversion is irreversible - coins are deducted permanently
 - Must meet minimum coins requirement to convert
 - Cannot convert more coins than user has
+---
+
+## Wallet & Task History API
+
+### GET /users/wallethistory
+Get a combined history of all wallet-related activities for the authenticated user (earnings and deductions).
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Query Parameters (Optional):**
+- `page`: Page number (default: 1)
+- `limit`: Number of records per page (default: 50)
+- `type`: Filter by event type (optional). Supported values:
+  - `SCRATCH_CARD`
+  - `SCRATCH_CARD_DAILY_LIMIT`
+  - `CAPTCHA`
+  - `APP_INSTALL`
+  - `WITHDRAWAL`
+  - `COIN_CONVERSION`
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Wallet & task history retrieved successfully",
+  "data": {
+    "events": [
+      {
+        "type": "SCRATCH_CARD",
+        "sourceId": "60f7b3b3b3b3b3b3b3b3b3b3",
+        "title": "Scratch Card - Wednesday",
+        "coinsChange": 40,
+        "walletChange": 0,
+        "status": "Completed",
+        "meta": {
+          "day": "Wednesday",
+          "rewardType": "Coins",
+          "weekStartDate": "2024-01-15T00:00:00.000Z"
+        },
+        "createdAt": "2024-01-17T10:30:00.000Z"
+      },
+      {
+        "type": "WITHDRAWAL",
+        "sourceId": "60f7b3b3b3b3b3b3b3b3b3c0",
+        "title": "Withdrawal - UPI",
+        "coinsChange": 0,
+        "walletChange": -100,
+        "status": "Pending",
+        "meta": {
+          "paymentMethod": "UPI",
+          "amount": 100
+        },
+        "createdAt": "2024-01-18T09:00:00.000Z"
+      },
+      {
+        "type": "COIN_CONVERSION",
+        "sourceId": "60f7b3b3b3b3b3b3b3b3b3d1",
+        "title": "Coin Conversion",
+        "coinsChange": -200,
+        "walletChange": 20,
+        "status": "Completed",
+        "meta": {
+          "conversionRate": 10
+        },
+        "createdAt": "2024-01-18T11:15:00.000Z"
+      }
+    ],
+    "pagination": {
+      "currentPage": 1,
+      "totalPages": 5,
+      "totalEvents": 100,
+      "limit": 50,
+      "hasNextPage": true,
+      "hasPrevPage": false
+    },
+    "totals": {
+      "totalCoinsChange": 500,
+      "totalWalletChange": -150,
+      "currentCoins": 1000,
+      "currentWalletBalance": 350.50
+    }
+  }
+}
+```
+
+**Response Fields:**
+- `events`: Array of history records (sorted by newest first)
+  - `type`: Event type (`SCRATCH_CARD`, `SCRATCH_CARD_DAILY_LIMIT`, `CAPTCHA`, `APP_INSTALL`, `WITHDRAWAL`, `COIN_CONVERSION`)
+  - `sourceId`: ID of the underlying record (e.g., scratch card claim ID, withdrawal request ID)
+  - `title`: Short description of the event
+  - `coinsChange`: Coins added (+) or removed (-) by this event
+  - `walletChange`: Wallet balance added (+) or removed (-) by this event
+  - `status`: Status of the event (e.g., `Completed`, `Pending`, `Approved`, `Rejected`)
+  - `meta`: Extra details depending on the type (day, app name, payment method, conversion rate, etc.)
+  - `createdAt`: When the event happened
+- `pagination`: Standard pagination info
+- `totals`:
+  - `totalCoinsChange`: Sum of `coinsChange` over all events in result set
+  - `totalWalletChange`: Sum of `walletChange` over all events in result set
+  - `currentCoins`: User's current coins balance
+  - `currentWalletBalance`: User's current wallet balance
+
+**Notes:**
+- History includes:
+  - Scratch cards (`SCRATCH_CARD`)
+  - Daily limit scratch cards (`SCRATCH_CARD_DAILY_LIMIT`)
+  - Captcha rewards (`CAPTCHA`)
+  - Approved app installation rewards (`APP_INSTALL`)
+  - Withdrawal requests (`WITHDRAWAL`)
+  - Coin conversions (`COIN_CONVERSION`)
+- Withdrawals show a negative `walletChange` (amount deducted). If the request is later rejected, the refund happens via admin logic and may appear in another admin-specific history.
+- You can filter by `type` to show only one category (e.g., only withdrawals or only coin conversions).
+- This API is designed for showing a Paytm-style wallet statement screen in the app.
+- Each event shows exactly which task was completed and how much coins/wallet balance was earned or spent.
+
+**Detailed Event Type Examples:**
+
+**SCRATCH_CARD:**
+```json
+{
+  "type": "SCRATCH_CARD",
+  "title": "Scratch Card - Wednesday",
+  "coinsChange": 40,
+  "walletChange": 0,
+  "status": "Completed",
+  "meta": {
+    "day": "Wednesday",
+    "rewardType": "Coins",
+    "weekStartDate": "2024-01-15T00:00:00.000Z"
+  }
+}
+```
+
+**SCRATCH_CARD_DAILY_LIMIT:**
+```json
+{
+  "type": "SCRATCH_CARD_DAILY_LIMIT",
+  "title": "Scratch Card Daily Limit",
+  "coinsChange": 50,
+  "walletChange": 10.50,
+  "status": "Completed",
+  "meta": {}
+}
+```
+
+**CAPTCHA:**
+```json
+{
+  "type": "CAPTCHA",
+  "title": "Captcha Solve",
+  "coinsChange": 1,
+  "walletChange": 0,
+  "status": "Completed",
+  "meta": {
+    "rewardType": "Coins"
+  }
+}
+```
+
+**APP_INSTALL:**
+```json
+{
+  "type": "APP_INSTALL",
+  "title": "App Install - Example App",
+  "coinsChange": 50,
+  "walletChange": 0,
+  "status": "Approved",
+  "meta": {
+    "appId": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "appName": "Example App"
+  }
+}
+```
+
+**WITHDRAWAL:**
+```json
+{
+  "type": "WITHDRAWAL",
+  "title": "Withdrawal - UPI",
+  "coinsChange": 0,
+  "walletChange": -100,
+  "status": "Pending",
+  "meta": {
+    "paymentMethod": "UPI",
+    "amount": 100
+  }
+}
+```
+
+**COIN_CONVERSION:**
+```json
+{
+  "type": "COIN_CONVERSION",
+  "title": "Coin Conversion",
+  "coinsChange": -200,
+  "walletChange": 20,
+  "status": "Completed",
+  "meta": {
+    "conversionRate": 10
+  }
+}
+```
+
+**Error Responses:**
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User Not Found"
+}
+```
+
+**Example Usage:**
+
+#### Get All History
+```bash
+curl -X GET "http://localhost:3100/users/wallethistory?page=1&limit=50" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+#### Get Only Scratch Card History
+```bash
+curl -X GET "http://localhost:3100/users/wallethistory?type=SCRATCH_CARD" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+#### Get Only Withdrawal History
+```bash
+curl -X GET "http://localhost:3100/users/wallethistory?type=WITHDRAWAL" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+#### Get Only Coin Conversion History
+```bash
+curl -X GET "http://localhost:3100/users/wallethistory?type=COIN_CONVERSION" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+#### Get Only App Install History
+```bash
+curl -X GET "http://localhost:3100/users/wallethistory?type=APP_INSTALL" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+**Using JavaScript (Fetch API):**
+```javascript
+const token = localStorage.getItem('token');
+
+// Get all history
+fetch('http://localhost:3100/users/wallethistory?page=1&limit=50', {
+  method: 'GET',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Total Events:', data.data.pagination.totalEvents);
+  console.log('Total Coins Earned:', data.data.totals.totalCoinsChange);
+  console.log('Total Wallet Change:', data.data.totals.totalWalletChange);
+  
+  // Show each completed task
+  data.data.events.forEach(event => {
+    if (event.coinsChange > 0) {
+      console.log(`Task: ${event.title} - Earned ${event.coinsChange} coins`);
+    }
+    if (event.walletChange > 0) {
+      console.log(`Task: ${event.title} - Earned ₹${event.walletChange}`);
+    }
+  });
+})
+.catch(error => console.error('Error:', error));
+
+// Get only scratch card history
+fetch('http://localhost:3100/users/wallethistory?type=SCRATCH_CARD', {
+  method: 'GET',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Scratch Card Claims:', data.data.events.length);
+  const totalScratchCoins = data.data.events.reduce((sum, e) => sum + e.coinsChange, 0);
+  console.log('Total Coins from Scratch Cards:', totalScratchCoins);
+});
+```
 
 ---
 
@@ -2728,6 +3390,204 @@ curl -X POST http://localhost:3100/users/scratchcard/claim \
 curl -X GET "http://localhost:3100/users/scratchcard/history?page=1&limit=20" \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json"
+```
+
+---
+
+## Scratch Card Daily Limit APIs
+
+### GET /users/scratchcard/dailylimit
+Get scratch card daily limit information. This is a separate feature from the regular scratch card.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Scratch card daily limit info retrieved successfully",
+  "data": {
+    "isActive": true,
+    "dailyLimit": 3,
+    "rewardAmount": 10.50,
+    "rewardCoins": 50,
+    "claimsToday": 1,
+    "remainingClaims": 2,
+    "canClaim": true
+  }
+}
+```
+
+**Response Fields:**
+- `isActive`: Whether the daily limit feature is enabled
+- `dailyLimit`: Maximum number of claims allowed per day
+- `rewardAmount`: Wallet balance reward amount
+- `rewardCoins`: Coins reward amount
+- `claimsToday`: Number of times user has claimed today
+- `remainingClaims`: Number of claims remaining today
+- `canClaim`: Whether user can claim (true if feature is active, has remaining claims, and rewards are configured)
+
+**Error Responses:**
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User Not Found"
+}
+```
+
+**Note:**
+- If settings are not configured, returns default values with `isActive: false` and `canClaim: false`
+- Daily limit resets at midnight (00:00:00) each day
+- This feature is separate from the regular scratch card feature
+
+---
+
+### POST /users/scratchcard/dailylimit/claim
+Claim scratch card with daily limit. Both wallet balance and coins will be added if configured.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Scratch card daily limit claimed successfully",
+  "data": {
+    "claimId": "60f7b3b3b3b3b3b3b3b3b3b3",
+    "coinsAdded": 50,
+    "amountAdded": 10.50,
+    "currentCoins": 150,
+    "currentWalletBalance": 110.50,
+    "claimsToday": 1,
+    "remainingClaims": 2,
+    "claimedAt": "2024-01-18T10:30:00.000Z"
+  }
+}
+```
+
+**Response Fields:**
+- `claimId`: Unique ID of the claim record
+- `coinsAdded`: Coins that were added (0 if not configured)
+- `amountAdded`: Wallet balance that was added (0 if not configured)
+- `currentCoins`: User's current coin balance after claim
+- `currentWalletBalance`: User's current wallet balance after claim
+- `claimsToday`: Total number of claims made today (after this claim)
+- `remainingClaims`: Number of claims remaining today
+- `claimedAt`: Timestamp when the claim was made
+
+**Error Responses:**
+
+#### 400 Bad Request - Settings Not Configured
+```json
+{
+  "message": "Scratch card daily limit settings not configured"
+}
+```
+
+#### 400 Bad Request - Feature Disabled
+```json
+{
+  "message": "Scratch card daily limit feature is currently disabled"
+}
+```
+
+#### 400 Bad Request - No Rewards Configured
+```json
+{
+  "message": "No rewards configured for scratch card daily limit"
+}
+```
+
+#### 400 Bad Request - Daily Limit Reached
+```json
+{
+  "message": "Daily limit reached. You have already claimed 3 time(s) today. Maximum allowed: 3"
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User Not Found"
+}
+```
+
+**Note:**
+- Both `RewardAmount` (wallet balance) and `RewardCoins` will be added if configured
+- Daily limit is enforced per user per day
+- Limit resets at midnight (00:00:00) each day
+- This feature is completely separate from the regular scratch card feature
+- Users can use both features independently
+
+---
+
+## Example Usage for Scratch Card Daily Limit APIs
+
+### Using cURL
+
+#### Get Scratch Card Daily Limit Info
+```bash
+curl -X GET http://localhost:3100/users/scratchcard/dailylimit \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+#### Claim Scratch Card Daily Limit
+```bash
+curl -X POST http://localhost:3100/users/scratchcard/dailylimit/claim \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+### Using JavaScript (fetch)
+
+#### Get Scratch Card Daily Limit Info
+```javascript
+fetch('http://localhost:3100/users/scratchcard/dailylimit', {
+  method: 'GET',
+  headers: {
+    'Authorization': 'Bearer YOUR_JWT_TOKEN',
+    'Content-Type': 'application/json'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Daily Limit Info:', data);
+  if (data.data.canClaim) {
+    console.log(`You can claim! ${data.data.remainingClaims} claims remaining today.`);
+  }
+})
+.catch(error => console.error('Error:', error));
+```
+
+#### Claim Scratch Card Daily Limit
+```javascript
+fetch('http://localhost:3100/users/scratchcard/dailylimit/claim', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer YOUR_JWT_TOKEN',
+    'Content-Type': 'application/json'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Claim Result:', data);
+  if (data.data.coinsAdded > 0) {
+    console.log(`Coins added: ${data.data.coinsAdded}`);
+  }
+  if (data.data.amountAdded > 0) {
+    console.log(`Amount added: ${data.data.amountAdded}`);
+  }
+  console.log(`Remaining claims: ${data.data.remainingClaims}`);
+})
+.catch(error => console.error('Error:', error));
 ```
 
 ### Using JavaScript (Fetch API)

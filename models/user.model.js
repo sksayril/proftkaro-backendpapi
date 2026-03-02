@@ -1,6 +1,12 @@
 let mongoose = require('mongoose')
 
 let schema = new mongoose.Schema({
+    UserName: {
+        type: String,
+        required: true,
+        unique: true,
+        trim: true
+    },
     MobileNumber: {
         type: String,
         required: true,

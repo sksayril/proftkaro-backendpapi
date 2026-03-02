@@ -15,7 +15,10 @@ let appInstallationSubmissionModel = require('../models/appInstallationSubmissio
 let coinConversionSettingsModel = require('../models/coinConversionSettings.model')
 let scratchCardSettingsModel = require('../models/scratchCardSettings.model')
 let scratchCardClaimModel = require('../models/scratchCardClaim.model')
+let scratchCardDailyLimitSettingsModel = require('../models/scratchCardDailyLimitSettings.model')
+let scratchCardDailyLimitClaimModel = require('../models/scratchCardDailyLimitClaim.model')
 let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
+let signupBonusSettingsModel = require('../models/signupBonusSettings.model')
 
 // Admin Signup API
 router.post('/signup', async (req, res) => {
@@ -1623,6 +1626,88 @@ router.get('/coinconversion/settings', verifyToken, async (req, res) => {
   }
 })
 
+// ==================== SIGNUP BONUS SETTINGS APIs ====================
+
+// Set Signup Bonus Settings API
+router.post('/signupbonus/settings', verifyToken, async (req, res) => {
+  try {
+    const { SignupBonusAmount, RewardType } = req.body
+    
+    if (SignupBonusAmount === undefined || SignupBonusAmount === null) {
+      return res.status(400).json({
+        message: "SignupBonusAmount is required"
+      })
+    }
+
+    if (typeof SignupBonusAmount !== 'number' || SignupBonusAmount < 0) {
+      return res.status(400).json({
+        message: "SignupBonusAmount must be a number greater than or equal to 0"
+      })
+    }
+
+    const validRewardTypes = ['Coins', 'WalletBalance']
+    const rewardType = RewardType || 'Coins'
+    
+    if (!validRewardTypes.includes(rewardType)) {
+      return res.status(400).json({
+        message: "RewardType must be either 'Coins' or 'WalletBalance'"
+      })
+    }
+
+    // Update or create settings
+    let settings = await signupBonusSettingsModel.findOne()
+    if (settings) {
+      settings.SignupBonusAmount = SignupBonusAmount
+      settings.RewardType = rewardType
+      await settings.save()
+    } else {
+      settings = await signupBonusSettingsModel.create({
+        SignupBonusAmount: SignupBonusAmount,
+        RewardType: rewardType
+      })
+    }
+
+    return res.json({
+      message: "Signup bonus settings updated successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    console.error('Set Signup Bonus Settings - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get Signup Bonus Settings API
+router.get('/signupbonus/settings', verifyToken, async (req, res) => {
+  try {
+    let settings = await signupBonusSettingsModel.findOne()
+    
+    if (!settings) {
+      // Return default settings if not exists
+      settings = {
+        SignupBonusAmount: 0,
+        RewardType: 'Coins'
+      }
+    }
+
+    return res.json({
+      message: "Signup bonus settings retrieved successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    console.error('Get Signup Bonus Settings - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
 // ==================== SCRATCH CARD SETTINGS APIs ====================
 
 // Helper function to get start of week (Monday) normalized to midnight
@@ -1731,6 +1816,134 @@ router.get('/scratchcard/settings', verifyToken, async (req, res) => {
 
   } catch (err) {
     console.error('Get Scratch Card Settings - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== SCRATCH CARD DAILY LIMIT SETTINGS APIs ====================
+
+// Set Scratch Card Daily Limit Settings API
+router.post('/scratchcard/dailylimit/settings', verifyToken, async (req, res) => {
+  try {
+    const { DailyLimit, RewardAmount, RewardCoins, IsActive } = req.body
+    
+    // Validate DailyLimit
+    if (DailyLimit !== undefined && DailyLimit !== null) {
+      if (typeof DailyLimit !== 'number' || isNaN(DailyLimit) || DailyLimit < 1) {
+        return res.status(400).json({
+          message: "DailyLimit must be a number greater than or equal to 1"
+        })
+      }
+    }
+
+    // Validate RewardAmount
+    if (RewardAmount !== undefined && RewardAmount !== null) {
+      if (typeof RewardAmount !== 'number' || isNaN(RewardAmount) || RewardAmount < 0) {
+        return res.status(400).json({
+          message: "RewardAmount must be a number greater than or equal to 0"
+        })
+      }
+    }
+
+    // Validate RewardCoins
+    if (RewardCoins !== undefined && RewardCoins !== null) {
+      if (typeof RewardCoins !== 'number' || isNaN(RewardCoins) || RewardCoins < 0) {
+        return res.status(400).json({
+          message: "RewardCoins must be a number greater than or equal to 0"
+        })
+      }
+    }
+
+    // Validate IsActive
+    if (IsActive !== undefined && IsActive !== null && typeof IsActive !== 'boolean') {
+      return res.status(400).json({
+        message: "IsActive must be a boolean value"
+      })
+    }
+
+    // Update or create settings
+    let settings = await scratchCardDailyLimitSettingsModel.findOne()
+    if (settings) {
+      // Update only provided fields
+      if (DailyLimit !== undefined) settings.DailyLimit = DailyLimit
+      if (RewardAmount !== undefined) settings.RewardAmount = RewardAmount
+      if (RewardCoins !== undefined) settings.RewardCoins = RewardCoins
+      if (IsActive !== undefined) settings.IsActive = IsActive
+      
+      // Check if at least one reward is set after update
+      // Use updated values if provided, otherwise use existing values
+      const finalRewardAmount = RewardAmount !== undefined ? RewardAmount : (settings.RewardAmount || 0)
+      const finalRewardCoins = RewardCoins !== undefined ? RewardCoins : (settings.RewardCoins || 0)
+      
+      if (finalRewardAmount === 0 && finalRewardCoins === 0) {
+        return res.status(400).json({
+          message: "At least one reward (RewardAmount or RewardCoins) must be greater than 0"
+        })
+      }
+      
+      // Update the settings with final values
+      settings.RewardAmount = finalRewardAmount
+      settings.RewardCoins = finalRewardCoins
+      
+      await settings.save()
+    } else {
+      // Check if at least one reward is set for new settings
+      const finalRewardAmount = RewardAmount !== undefined ? RewardAmount : 0
+      const finalRewardCoins = RewardCoins !== undefined ? RewardCoins : 0
+      
+      if (finalRewardAmount === 0 && finalRewardCoins === 0) {
+        return res.status(400).json({
+          message: "At least one reward (RewardAmount or RewardCoins) must be greater than 0"
+        })
+      }
+      
+      settings = await scratchCardDailyLimitSettingsModel.create({
+        DailyLimit: DailyLimit !== undefined ? DailyLimit : 1,
+        RewardAmount: finalRewardAmount,
+        RewardCoins: finalRewardCoins,
+        IsActive: IsActive !== undefined ? IsActive : true
+      })
+    }
+
+    return res.json({
+      message: "Scratch card daily limit settings updated successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    console.error('Set Scratch Card Daily Limit Settings - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get Scratch Card Daily Limit Settings API
+router.get('/scratchcard/dailylimit/settings', verifyToken, async (req, res) => {
+  try {
+    let settings = await scratchCardDailyLimitSettingsModel.findOne()
+    
+    if (!settings) {
+      // Return default settings if not exists
+      settings = {
+        DailyLimit: 1,
+        RewardAmount: 0,
+        RewardCoins: 0,
+        IsActive: true
+      }
+    }
+
+    return res.json({
+      message: "Scratch card daily limit settings retrieved successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    console.error('Get Scratch Card Daily Limit Settings - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
