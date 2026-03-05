@@ -39,11 +39,18 @@ router.get('/refer/:referCode', async (req, res) => {
     // Android Intent URL format for deep linking
     // This will try to open the app first, then fallback to Play Store
     const appPackage = 'com.profitkaro'
-    const playStoreUrl = `https://play.google.com/store/apps/details?id=${appPackage}&referrer=${referCode}`
-    const intentUrl = `intent://refer?code=${referCode}#Intent;scheme=profitkaro;package=${appPackage};S.refer=${referCode};end`
+    const referCodeUpper = referCode.trim().toUpperCase()
     
-    // Custom scheme fallback
-    const customScheme = `profitkaro://refer?code=${referCode}`
+    // Play Store URL with referrer parameter (properly encoded)
+    const playStoreUrl = `https://play.google.com/store/apps/details?id=${appPackage}&referrer=${encodeURIComponent(referCodeUpper)}`
+    
+    // Intent URL with multiple parameter formats for better compatibility
+    // Format: intent://[host]/[path]?[parameters]#Intent;scheme=[scheme];package=[package];S.[key]=[value];end
+    const intentUrl = `intent://refer?code=${referCodeUpper}&refer=${referCodeUpper}#Intent;scheme=profitkaro;package=${appPackage};S.referCode=${referCodeUpper};S.code=${referCodeUpper};S.refer=${referCodeUpper};end`
+    
+    // Custom scheme fallback (multiple formats for better compatibility)
+    const customScheme1 = `profitkaro://refer?code=${referCodeUpper}&refer=${referCodeUpper}`
+    const customScheme2 = `profitkaro://refer?referCode=${referCodeUpper}`
 
     // Return HTML page with JavaScript to handle redirect
     res.send(`
@@ -53,6 +60,7 @@ router.get('/refer/:referCode', async (req, res) => {
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>Redirecting to ProfitKaro...</title>
+          <meta name="description" content="Opening ProfitKaro app with referral code ${referCodeUpper}">
           <style>
             body {
               font-family: Arial, sans-serif;
@@ -67,6 +75,7 @@ router.get('/refer/:referCode', async (req, res) => {
             .container {
               text-align: center;
               padding: 20px;
+              max-width: 400px;
             }
             .spinner {
               border: 4px solid rgba(255,255,255,0.3);
@@ -86,6 +95,20 @@ router.get('/refer/:referCode', async (req, res) => {
               text-decoration: underline;
               margin-top: 20px;
               display: inline-block;
+              padding: 10px 20px;
+              background: rgba(255,255,255,0.2);
+              border-radius: 5px;
+            }
+            a:hover {
+              background: rgba(255,255,255,0.3);
+            }
+            .code-display {
+              font-size: 24px;
+              font-weight: bold;
+              margin: 15px 0;
+              padding: 10px;
+              background: rgba(255,255,255,0.1);
+              border-radius: 5px;
             }
           </style>
         </head>
@@ -93,37 +116,111 @@ router.get('/refer/:referCode', async (req, res) => {
           <div class="container">
             <h1>Redirecting to ProfitKaro...</h1>
             <div class="spinner"></div>
-            <p>Opening app with referral code: <strong>${referCode}</strong></p>
+            <p>Opening app with referral code:</p>
+            <div class="code-display">${referCodeUpper}</div>
+            <p id="status">Attempting to open app...</p>
             <p id="fallback" style="display:none;">
-              <a href="${playStoreUrl}">Click here if app doesn't open automatically</a>
+              <a href="${playStoreUrl}" id="playStoreLink">Click here if app doesn't open automatically</a>
             </p>
           </div>
           <script>
-            // Try Android Intent URL first (works on Android Chrome)
-            function tryOpenApp() {
-              // Method 1: Try Intent URL (Android)
-              window.location.href = '${intentUrl}';
-              
-              // Method 2: Try custom scheme after a delay
-              setTimeout(function() {
-                window.location.href = '${customScheme}';
-              }, 500);
-              
-              // Method 3: Fallback to Play Store after 2 seconds
-              setTimeout(function() {
+            let appOpened = false;
+            let fallbackShown = false;
+            
+            // Function to show fallback link
+            function showFallback() {
+              if (!fallbackShown) {
+                fallbackShown = true;
                 document.getElementById('fallback').style.display = 'block';
-                window.location.href = '${playStoreUrl}';
-              }, 2000);
+                document.getElementById('status').textContent = 'App not found. Redirecting to Play Store...';
+              }
             }
             
-            // Detect if Android
+            // Function to try opening the app
+            function tryOpenApp() {
+              // Method 1: Try Intent URL (Android - most reliable)
+              try {
+                window.location.href = '${intentUrl}';
+                appOpened = true;
+              } catch(e) {
+                console.log('Intent URL failed:', e);
+              }
+              
+              // Method 2: Try custom scheme after short delay
+              setTimeout(function() {
+                if (!appOpened) {
+                  try {
+                    window.location.href = '${customScheme1}';
+                    appOpened = true;
+                  } catch(e) {
+                    console.log('Custom scheme 1 failed:', e);
+                  }
+                }
+              }, 300);
+              
+              // Method 3: Try alternative custom scheme
+              setTimeout(function() {
+                if (!appOpened) {
+                  try {
+                    window.location.href = '${customScheme2}';
+                    appOpened = true;
+                  } catch(e) {
+                    console.log('Custom scheme 2 failed:', e);
+                  }
+                }
+              }, 600);
+              
+              // Method 4: Fallback to Play Store after 1.5 seconds
+              setTimeout(function() {
+                if (!appOpened) {
+                  showFallback();
+                  // Redirect to Play Store after showing fallback
+                  setTimeout(function() {
+                    window.location.href = '${playStoreUrl}';
+                  }, 500);
+                }
+              }, 1500);
+            }
+            
+            // Detect device type
             const isAndroid = /Android/i.test(navigator.userAgent);
+            const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+            
+            // Handle page visibility change (app opened = page hidden)
+            document.addEventListener('visibilitychange', function() {
+              if (document.hidden) {
+                appOpened = true;
+              }
+            });
+            
+            // Handle blur event (user switched to app)
+            window.addEventListener('blur', function() {
+              appOpened = true;
+            });
             
             if (isAndroid) {
+              // Android: Try to open app
               tryOpenApp();
+            } else if (isIOS) {
+              // iOS: Try custom scheme, then App Store
+              try {
+                window.location.href = '${customScheme1}';
+                setTimeout(function() {
+                  if (!appOpened) {
+                    showFallback();
+                    window.location.href = 'https://apps.apple.com/app/profitkaro';
+                  }
+                }, 1500);
+              } catch(e) {
+                showFallback();
+                window.location.href = 'https://apps.apple.com/app/profitkaro';
+              }
             } else {
-              // For iOS or desktop, redirect to Play Store
-              window.location.href = '${playStoreUrl}';
+              // Desktop: Redirect to Play Store
+              document.getElementById('status').textContent = 'Redirecting to Play Store...';
+              setTimeout(function() {
+                window.location.href = '${playStoreUrl}';
+              }, 1000);
             }
           </script>
         </body>
