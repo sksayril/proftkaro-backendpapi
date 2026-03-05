@@ -10,6 +10,9 @@ var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
 var adminRouter = require('./routes/admin');
 
+// Initialize Cron Jobs
+const { startCronJobs } = require('./utilities/cronJobs');
+
 var app = express();
 
 // Enable CORS for all routes
@@ -24,5 +27,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/', indexRouter);
 app.use('/users', usersRouter);
 app.use('/admin', adminRouter);
+
+// Start cron jobs when database is connected
+const mongoose = require('mongoose');
+mongoose.connection.once('open', () => {
+  console.log('Database connected. Starting cron jobs...');
+  startCronJobs();
+});
 
 module.exports = app;

@@ -42,6 +42,8 @@ let scratchCardDailyLimitSettingsModel = require('../models/scratchCardDailyLimi
 let scratchCardDailyLimitClaimModel = require('../models/scratchCardDailyLimitClaim.model')
 let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
 let signupBonusSettingsModel = require('../models/signupBonusSettings.model')
+let sponsorPromotionSubmissionModel = require('../models/sponsorPromotionSubmission.model')
+let supportLinkSettingsModel = require('../models/supportLinkSettings.model')
 
 // Function to generate unique referCode (format: PRK08F9 - 3 letters + 2 digits + 1 letter)
 function generateReferCode() {
@@ -2959,6 +2961,189 @@ router.get('/leaderboard/top', async (req, res) => {
 
   } catch (err) {
     console.error('Get Top Leaderboard - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== SPONSOR PROMOTION SUBMISSION APIs ====================
+
+// Submit Sponsor Promotion API
+router.post('/sponsor/promotion', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { SponsorName, MobileNumber, Email, AppPromotion } = req.body
+
+    // Validate required fields
+    if (!SponsorName || !MobileNumber || !Email || !AppPromotion) {
+      return res.status(400).json({
+        message: "SponsorName, MobileNumber, Email, and AppPromotion are required"
+      })
+    }
+
+    // Validate SponsorName
+    if (typeof SponsorName !== 'string' || SponsorName.trim().length === 0) {
+      return res.status(400).json({
+        message: "SponsorName must be a valid non-empty string"
+      })
+    }
+
+    // Validate MobileNumber
+    if (typeof MobileNumber !== 'string' || MobileNumber.trim().length === 0) {
+      return res.status(400).json({
+        message: "MobileNumber must be a valid non-empty string"
+      })
+    }
+
+    // Validate Email format (basic validation)
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (typeof Email !== 'string' || !emailRegex.test(Email.trim())) {
+      return res.status(400).json({
+        message: "Email must be a valid email address"
+      })
+    }
+
+    // Validate AppPromotion
+    if (typeof AppPromotion !== 'string' || AppPromotion.trim().length === 0) {
+      return res.status(400).json({
+        message: "AppPromotion must be a valid non-empty string"
+      })
+    }
+
+    // Check if user exists
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found"
+      })
+    }
+
+    // Create sponsor promotion submission
+    const submission = await sponsorPromotionSubmissionModel.create({
+      UserId: userId,
+      SponsorName: SponsorName.trim(),
+      MobileNumber: MobileNumber.trim(),
+      Email: Email.trim().toLowerCase(),
+      AppPromotion: AppPromotion.trim(),
+      Status: 'Pending'
+    })
+
+    return res.json({
+      message: "Sponsor promotion submission created successfully",
+      data: {
+        submissionId: submission._id,
+        sponsorName: submission.SponsorName,
+        mobileNumber: submission.MobileNumber,
+        email: submission.Email,
+        appPromotion: submission.AppPromotion,
+        status: submission.Status,
+        createdAt: submission.createdAt
+      }
+    })
+
+  } catch (err) {
+    console.error('Submit Sponsor Promotion - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get User's Sponsor Promotion Submissions API
+router.get('/sponsor/promotion', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { status } = req.query // Optional filter by status
+
+    // Check if user exists
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found"
+      })
+    }
+
+    // Build query
+    let query = { UserId: userId }
+    if (status && ['Pending', 'Approved', 'Rejected'].includes(status)) {
+      query.Status = status
+    }
+
+    // Get user's submissions
+    const submissions = await sponsorPromotionSubmissionModel.find(query)
+      .sort({ createdAt: -1 })
+
+    return res.json({
+      message: "Sponsor promotion submissions retrieved successfully",
+      data: {
+        submissions: submissions.map(sub => ({
+          submissionId: sub._id,
+          sponsorName: sub.SponsorName,
+          mobileNumber: sub.MobileNumber,
+          email: sub.Email,
+          appPromotion: sub.AppPromotion,
+          status: sub.Status,
+          adminNotes: sub.AdminNotes,
+          createdAt: sub.createdAt,
+          updatedAt: sub.updatedAt
+        })),
+        totalSubmissions: submissions.length,
+        pendingCount: submissions.filter(s => s.Status === 'Pending').length,
+        approvedCount: submissions.filter(s => s.Status === 'Approved').length,
+        rejectedCount: submissions.filter(s => s.Status === 'Rejected').length
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Sponsor Promotion Submissions - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== SUPPORT LINK API ====================
+
+// Get Support Link API
+router.get('/support/link', async (req, res) => {
+  try {
+    // Get support link settings
+    let settings = await supportLinkSettingsModel.getSettings()
+
+    // Only return active settings
+    if (!settings.IsActive) {
+      return res.json({
+        message: "Support link retrieved successfully",
+        data: {
+          supportLink: null,
+          supportEmail: null,
+          supportPhone: null,
+          supportWhatsApp: null,
+          description: null,
+          isActive: false,
+          note: "Support is currently unavailable"
+        }
+      })
+    }
+
+    return res.json({
+      message: "Support link retrieved successfully",
+      data: {
+        supportLink: settings.SupportLink,
+        supportEmail: settings.SupportEmail,
+        supportPhone: settings.SupportPhone,
+        supportWhatsApp: settings.SupportWhatsApp,
+        description: settings.Description,
+        isActive: settings.IsActive
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Support Link - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message

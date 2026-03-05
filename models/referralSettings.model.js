@@ -15,6 +15,23 @@ let schema = new mongoose.Schema({
         type: String,
         enum: ['Coins', 'WalletBalance'],
         default: 'Coins'
+    },
+    // New fields for percentage-based referral rewards
+    UsePercentage: {
+        type: Boolean,
+        default: false
+    },
+    ReferrerPercentage: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 100
+    },
+    // Percentage is calculated based on new user's earnings
+    PercentageBasedOn: {
+        type: String,
+        enum: ['SignupBonus', 'TotalEarnings', 'WalletBalance'],
+        default: 'SignupBonus'
     }
 })
 

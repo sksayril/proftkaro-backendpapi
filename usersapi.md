@@ -3665,3 +3665,804 @@ fetch('http://localhost:3100/users/scratchcard/history?page=1&limit=20', {
 - Rewards can be in Coins or WalletBalance (set by admin)
 - Users can view their complete scratch card claim history
 - History includes pagination and statistics
+
+---
+
+## Admin APIs for Commission Slabs and User Earnings
+
+### Commission Slab Settings APIs
+
+Commission slabs allow admins to set percentage-based commission rates based on user earnings. This enables tiered commission structures where users earning more get different commission percentages.
+
+#### POST /admin/commission/slabs
+Create a new commission slab.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "SlabName": "Bronze Tier",
+  "MinEarnings": 0,
+  "MaxEarnings": 1000,
+  "CommissionPercentage": 5,
+  "RewardType": "Coins",
+  "IsActive": true,
+  "Order": 1,
+  "CommissionBasedOn": "ReferredUserWalletBalance"
+}
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Commission slab created successfully",
+  "data": {
+    "_id": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "SlabName": "Bronze Tier",
+    "MinEarnings": 0,
+    "MaxEarnings": 1000,
+    "CommissionPercentage": 5,
+    "RewardType": "Coins",
+    "IsActive": true,
+    "Order": 1,
+    "createdAt": "2024-01-18T20:00:00.000Z",
+    "updatedAt": "2024-01-18T20:00:00.000Z"
+  }
+}
+```
+
+**Note:**
+- `SlabName`: Name of the commission slab (e.g., "Bronze Tier", "Silver Tier")
+- `MinEarnings`: Minimum earnings amount for this slab (must be >= 0)
+- `MaxEarnings`: Maximum earnings amount (null means no upper limit)
+- `CommissionPercentage`: Commission percentage (0-100)
+- `RewardType`: Either "Coins" or "WalletBalance"
+- `IsActive`: Whether the slab is active
+- `Order`: Lower order = checked first when determining which slab applies
+- `CommissionBasedOn`: What the commission is calculated from (default: "ReferredUserWalletBalance")
+  - `ReferredUserWalletBalance`: Commission based on total wallet balance of the referred user
+  - `WithdrawalRequestAmount`: Commission based on withdrawal request amount
+  - `WithdrawalRequestTime`: Commission based on withdrawal request time/date
+- Slabs cannot overlap - each earnings range must be unique
+
+**Error Responses:**
+
+#### 400 Bad Request - Overlapping Slabs
+```json
+{
+  "message": "Slab overlaps with existing slab \"Bronze Tier\" (0 - 1000)"
+}
+```
+
+#### 400 Bad Request - Invalid Percentage
+```json
+{
+  "message": "CommissionPercentage must be between 0 and 100"
+}
+```
+
+---
+
+#### GET /admin/commission/slabs
+Get all commission slabs.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Commission slabs retrieved successfully",
+  "data": {
+    "slabs": [
+      {
+        "_id": "60f7b3b3b3b3b3b3b3b3b3b1",
+        "SlabName": "Bronze Tier",
+        "MinEarnings": 0,
+        "MaxEarnings": 1000,
+        "CommissionPercentage": 5,
+        "RewardType": "Coins",
+        "IsActive": true,
+        "Order": 1,
+        "CommissionBasedOn": "ReferredUserWalletBalance"
+      },
+      {
+        "_id": "60f7b3b3b3b3b3b3b3b3b2",
+        "SlabName": "Silver Tier",
+        "MinEarnings": 1001,
+        "MaxEarnings": 5000,
+        "CommissionPercentage": 10,
+        "RewardType": "Coins",
+        "IsActive": true,
+        "Order": 2,
+        "CommissionBasedOn": "WithdrawalRequestAmount"
+      },
+      {
+        "_id": "60f7b3b3b3b3b3b3b3b3b3",
+        "SlabName": "Gold Tier",
+        "MinEarnings": 5001,
+        "MaxEarnings": null,
+        "CommissionPercentage": 15,
+        "RewardType": "WalletBalance",
+        "IsActive": true,
+        "Order": 3,
+        "CommissionBasedOn": "WithdrawalRequestTime"
+      }
+    ],
+    "totalSlabs": 3,
+    "activeSlabs": 3
+  }
+}
+```
+
+---
+
+#### PUT /admin/commission/slabs/:slabId
+Update a commission slab.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body (all fields optional):**
+```json
+{
+  "SlabName": "Updated Bronze Tier",
+  "MinEarnings": 0,
+  "MaxEarnings": 1500,
+  "CommissionPercentage": 7,
+  "RewardType": "WalletBalance",
+  "IsActive": false,
+  "Order": 1,
+  "CommissionBasedOn": "WithdrawalRequestAmount"
+}
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Commission slab updated successfully",
+  "data": {
+    "_id": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "SlabName": "Updated Bronze Tier",
+    "MinEarnings": 0,
+    "MaxEarnings": 1500,
+    "CommissionPercentage": 7,
+    "RewardType": "WalletBalance",
+    "IsActive": false,
+    "Order": 1,
+    "updatedAt": "2024-01-18T21:00:00.000Z"
+  }
+}
+```
+
+---
+
+#### DELETE /admin/commission/slabs/:slabId
+Delete a commission slab.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Commission slab deleted successfully"
+}
+```
+
+---
+
+### Updated Referral Settings API (with Percentage Support)
+
+#### POST /admin/referral/settings
+Set referral settings with support for both fixed amounts and percentage-based rewards.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body (Fixed Amount Mode):**
+```json
+{
+  "RewardForNewUser": 50,
+  "RewardForReferrer": 25,
+  "RewardType": "Coins",
+  "UsePercentage": false
+}
+```
+
+**Request Body (Percentage Mode):**
+```json
+{
+  "RewardForNewUser": 50,
+  "RewardForReferrer": 10,
+  "RewardType": "Coins",
+  "UsePercentage": true,
+  "ReferrerPercentage": 15,
+  "PercentageBasedOn": "SignupBonus"
+}
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Referral settings updated successfully",
+  "data": {
+    "RewardForNewUser": 50,
+    "RewardForReferrer": 25,
+    "RewardType": "Coins",
+    "UsePercentage": true,
+    "ReferrerPercentage": 15,
+    "PercentageBasedOn": "SignupBonus"
+  }
+}
+```
+
+**Note:**
+- `UsePercentage`: If true, referral rewards are calculated as a percentage
+- `ReferrerPercentage`: Percentage (0-100) the referrer gets when `UsePercentage` is true
+- `PercentageBasedOn`: What the percentage is calculated from:
+  - `SignupBonus`: Percentage of the new user's signup bonus
+  - `TotalEarnings`: Percentage of the new user's total earnings
+  - `WalletBalance`: Percentage of the new user's wallet balance
+- When `UsePercentage` is false, `RewardForReferrer` is a fixed amount
+- `RewardForNewUser` is always a fixed amount
+
+---
+
+### Get All Users with Earnings API
+
+#### GET /admin/users/earnings
+Get all users with detailed earnings breakdown. Shows which user earned how much from different sources.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Query Parameters (Optional):**
+- `page`: Page number (default: 1)
+- `limit`: Number of users per page (default: 50)
+- `search`: Search by UserName, MobileNumber, or ReferCode
+- `sortBy`: Sort by `totalEarnings` (default), `coins`, `walletBalance`, or `referralCount`
+
+**Example Request:**
+```
+GET /admin/users/earnings?page=1&limit=20&sortBy=totalEarnings&search=john
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Users with earnings retrieved successfully",
+  "data": {
+    "users": [
+      {
+        "userId": "60f7b3b3b3b3b3b3b3b3b3b1",
+        "userName": "john_doe",
+        "mobileNumber": "9876543210",
+        "referCode": "PRK08F9",
+        "coins": 500,
+        "walletBalance": 250.50,
+        "totalEarnings": 750.50,
+        "earningsBreakdown": {
+          "coins": 500,
+          "walletBalance": 250.50,
+          "appInstallations": 200,
+          "scratchCards": 150,
+          "captcha": 50,
+          "dailyBonus": 100,
+          "referralEarnings": 50
+        },
+        "referralCount": 5,
+        "referredBy": "ABC12X",
+        "signupTime": "2024-01-18T20:00:00.000Z",
+        "lastLoginTime": "2024-01-18T22:00:00.000Z",
+        "isBlocked": false,
+        "createdAt": "2024-01-18T20:00:00.000Z",
+        "updatedAt": "2024-01-18T22:00:00.000Z"
+      }
+    ],
+    "pagination": {
+      "currentPage": 1,
+      "totalPages": 5,
+      "totalUsers": 100,
+      "limit": 20,
+      "hasNextPage": true,
+      "hasPrevPage": false
+    },
+    "statistics": {
+      "totalCoins": 50000,
+      "totalWalletBalance": 25000.50,
+      "totalEarnings": 75000.50,
+      "totalReferrals": 500
+    }
+  }
+}
+```
+
+**Response Fields:**
+- `users`: Array of users with earnings data
+  - `userId`: User's unique ID
+  - `userName`: User's username
+  - `mobileNumber`: User's mobile number
+  - `referCode`: User's referral code
+  - `coins`: Current coin balance
+  - `walletBalance`: Current wallet balance
+  - `totalEarnings`: Total earnings (coins + wallet balance)
+  - `earningsBreakdown`: Detailed breakdown of earnings:
+    - `coins`: Current coins
+    - `walletBalance`: Current wallet balance
+    - `appInstallations`: Total earnings from approved app installations
+    - `scratchCards`: Total earnings from scratch cards
+    - `captcha`: Total earnings from captcha solves
+    - `dailyBonus`: Total earnings from daily bonuses
+    - `referralEarnings`: Total earnings from referrals (if user referred others)
+  - `referralCount`: Number of users referred by this user
+  - `referredBy`: Referral code used by this user (if any)
+  - `signupTime`: When user signed up
+  - `lastLoginTime`: Last login timestamp
+  - `isBlocked`: Whether user is blocked
+- `pagination`: Standard pagination info
+- `statistics`: Aggregate statistics for all users in the result set
+
+**Note:**
+- Earnings breakdown shows how much each user earned from different sources
+- `referralEarnings` shows how much the user earned by referring others
+- Users are sorted by `totalEarnings` by default (highest first)
+- Can search by username, mobile number, or referral code
+- Can sort by total earnings, coins, wallet balance, or referral count
+
+**Error Responses:**
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "message": "Internal Server Error",
+  "error": "Error message details"
+}
+```
+
+---
+
+## Notes for Commission Slabs and Earnings
+
+- **Commission Slabs**: Allow admins to set tiered commission percentages based on user earnings
+- **Commission Basis Options**: Admin can choose what the commission is calculated from:
+  - **ReferredUserWalletBalance**: Commission is calculated based on the total wallet balance of the user who was referred. When a user refers someone, the commission is calculated from the referred user's current wallet balance.
+  - **WithdrawalRequestAmount**: Commission is calculated based on the withdrawal request amount. When a referred user makes a withdrawal request, the commission is calculated from that withdrawal amount.
+  - **WithdrawalRequestTime**: Commission is calculated based on the withdrawal request time/date. This can be used for time-based commission structures.
+- **Slab Overlap Prevention**: System prevents overlapping earnings ranges
+- **Percentage-Based Referrals**: Referral rewards can be calculated as a percentage of new user's earnings
+- **Earnings Tracking**: Complete breakdown of how much each user earned from different sources
+- **User Earnings API**: Shows which user name earned how much amount from each source
+- **Sorting Options**: Users can be sorted by total earnings, coins, wallet balance, or referral count
+- **Search Functionality**: Search users by username, mobile number, or referral code
+- **Pagination**: Large user lists are paginated for better performance
+
+---
+
+## Sponsor Promotion Submission APIs
+
+Users can submit sponsor promotion requests with sponsor details and app promotion information. Admin can review and approve/reject these submissions.
+
+### POST /users/sponsor/promotion
+Submit a sponsor promotion request with sponsor details and app promotion information.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "SponsorName": "John Doe",
+  "MobileNumber": "9876543210",
+  "Email": "sponsor@example.com",
+  "AppPromotion": "My Awesome App"
+}
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Sponsor promotion submission created successfully",
+  "data": {
+    "submissionId": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "sponsorName": "John Doe",
+    "mobileNumber": "9876543210",
+    "email": "sponsor@example.com",
+    "appPromotion": "My Awesome App",
+    "status": "Pending",
+    "createdAt": "2024-01-18T20:00:00.000Z"
+  }
+}
+```
+
+**Note:**
+- `SponsorName`: Name of the sponsor (required, non-empty string)
+- `MobileNumber`: Sponsor's mobile number (required, non-empty string)
+- `Email`: Sponsor's email address (required, valid email format)
+- `AppPromotion`: Name of the app to promote (required, non-empty string)
+- Submission status is automatically set to "Pending"
+- Admin will review and approve/reject the submission
+
+**Error Responses:**
+
+#### 400 Bad Request - Missing Fields
+```json
+{
+  "message": "SponsorName, MobileNumber, Email, and AppPromotion are required"
+}
+```
+
+#### 400 Bad Request - Invalid Email
+```json
+{
+  "message": "Email must be a valid email address"
+}
+```
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User not found"
+}
+```
+
+---
+
+### GET /users/sponsor/promotion
+Get all sponsor promotion submissions for the authenticated user.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Query Parameters (Optional):**
+- `status`: Filter by status ("Pending", "Approved", "Rejected")
+
+**Example Request:**
+```
+GET /users/sponsor/promotion?status=Pending
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Sponsor promotion submissions retrieved successfully",
+  "data": {
+    "submissions": [
+      {
+        "submissionId": "60f7b3b3b3b3b3b3b3b3b3b1",
+        "sponsorName": "John Doe",
+        "mobileNumber": "9876543210",
+        "email": "sponsor@example.com",
+        "appPromotion": "My Awesome App",
+        "status": "Pending",
+        "adminNotes": null,
+        "createdAt": "2024-01-18T20:00:00.000Z",
+        "updatedAt": "2024-01-18T20:00:00.000Z"
+      },
+      {
+        "submissionId": "60f7b3b3b3b3b3b3b3b3b2",
+        "sponsorName": "Jane Smith",
+        "mobileNumber": "9876543211",
+        "email": "jane@example.com",
+        "appPromotion": "Another App",
+        "status": "Approved",
+        "adminNotes": "Approved for promotion",
+        "createdAt": "2024-01-17T15:00:00.000Z",
+        "updatedAt": "2024-01-18T10:00:00.000Z"
+      }
+    ],
+    "totalSubmissions": 2,
+    "pendingCount": 1,
+    "approvedCount": 1,
+    "rejectedCount": 0
+  }
+}
+```
+
+**Note:**
+- Returns all sponsor promotion submissions for the authenticated user
+- Can filter by status using query parameter
+- Submissions are sorted by creation date (newest first)
+- Includes counts for each status
+
+**Error Responses:**
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User not found"
+}
+```
+
+---
+
+## Example Usage for Sponsor Promotion APIs
+
+### Using cURL
+
+#### Submit Sponsor Promotion
+```bash
+curl -X POST http://localhost:3100/users/sponsor/promotion \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "SponsorName": "John Doe",
+    "MobileNumber": "9876543210",
+    "Email": "sponsor@example.com",
+    "AppPromotion": "My Awesome App"
+  }'
+```
+
+#### Get User's Sponsor Submissions
+```bash
+curl -X GET "http://localhost:3100/users/sponsor/promotion?status=Pending" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+### Using JavaScript (Fetch API)
+
+#### Submit Sponsor Promotion
+```javascript
+const token = localStorage.getItem('token');
+fetch('http://localhost:3100/users/sponsor/promotion', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    SponsorName: 'John Doe',
+    MobileNumber: '9876543210',
+    Email: 'sponsor@example.com',
+    AppPromotion: 'My Awesome App'
+  })
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Submission successful:', data.message);
+  console.log('Submission ID:', data.data.submissionId);
+  console.log('Status:', data.data.status);
+})
+.catch(error => console.error('Error:', error));
+```
+
+#### Get User's Sponsor Submissions
+```javascript
+const token = localStorage.getItem('token');
+fetch('http://localhost:3100/users/sponsor/promotion?status=Pending', {
+  method: 'GET',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Total Submissions:', data.data.totalSubmissions);
+  console.log('Pending:', data.data.pendingCount);
+  console.log('Approved:', data.data.approvedCount);
+  data.data.submissions.forEach(sub => {
+    console.log(`${sub.sponsorName} - ${sub.appPromotion}: ${sub.status}`);
+  });
+})
+.catch(error => console.error('Error:', error));
+```
+
+---
+
+## Notes for Sponsor Promotion System
+
+- Sponsor promotion APIs require JWT token authentication
+- Users can submit multiple sponsor promotion requests
+- Each submission includes sponsor name, mobile number, email, and app promotion name
+- Submissions start with "Pending" status
+- Admin reviews and approves/rejects submissions
+- Users can view their submission history and status
+- Email validation ensures valid email format
+- All fields are required for submission
+
+---
+
+## Daily Limits and Automatic Reset
+
+The system automatically resets all daily limits at midnight (00:00) every day. No manual action is required.
+
+### Automatic Daily Reset
+
+The following daily limits are automatically reset daily:
+
+1. **Scratch Card Daily Limit**: Resets at midnight - users can claim again the next day
+2. **Daily Spin Limit**: Resets at midnight - users get their full daily spin limit back
+3. **Captcha Daily Limit**: Resets at midnight - users can solve captchas again
+
+### How It Works
+
+- The system uses date-based queries to check if activities occurred "today"
+- At midnight, all previous day's activities are automatically excluded from "today's" count
+- Users don't need to do anything - limits reset automatically
+- Cron jobs run in the background to verify and maintain the reset process
+
+### Cron Jobs
+
+The system includes automated cron jobs that:
+- **Daily Reset Verification** (runs at 00:00): Verifies that all daily limits are properly reset
+- **Cleanup Old Records** (runs at 01:00): Removes old records older than 90 days for database maintenance
+
+These jobs run automatically when the server starts and require no manual intervention.
+
+**Note**: Daily limits reset automatically based on date queries. The system checks if records are from "today" vs "yesterday", so limits effectively reset at midnight without needing to clear any data.
+
+---
+
+## Support Link API
+
+Users can retrieve support contact information including support link, email, phone, and WhatsApp.
+
+### GET /users/support/link
+Get support contact information.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Support link retrieved successfully",
+  "data": {
+    "supportLink": "https://support.example.com",
+    "supportEmail": "support@example.com",
+    "supportPhone": "+1234567890",
+    "supportWhatsApp": "+1234567890",
+    "description": "Contact us for any assistance",
+    "isActive": true
+  }
+}
+```
+
+**Response (When Support is Inactive):**
+```json
+{
+  "message": "Support link retrieved successfully",
+  "data": {
+    "supportLink": null,
+    "supportEmail": null,
+    "supportPhone": null,
+    "supportWhatsApp": null,
+    "description": null,
+    "isActive": false,
+    "note": "Support is currently unavailable"
+  }
+}
+```
+
+**Response Fields:**
+- `supportLink`: Support website URL
+- `supportEmail`: Support email address
+- `supportPhone`: Support phone number
+- `supportWhatsApp`: Support WhatsApp number
+- `description`: Support description or instructions
+- `isActive`: Whether support is currently active
+- `note`: Message shown when support is inactive
+
+**Note:**
+- Returns support information configured by admin
+- If support is inactive (IsActive = false), all fields return null with a note
+- Support information is managed by admin through admin APIs
+- All fields are optional and may be null if not configured
+
+**Error Responses:**
+
+#### 401 Unauthorized - No Token
+```json
+{
+  "message": "Access denied. No token provided."
+}
+```
+
+#### 404 Not Found - User Not Found
+```json
+{
+  "message": "User not found"
+}
+```
+
+---
+
+## Example Usage for Support Link API
+
+### Using cURL
+
+#### Get Support Link
+```bash
+curl -X GET http://localhost:3100/users/support/link \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+### Using JavaScript (Fetch API)
+
+#### Get Support Link
+```javascript
+const token = localStorage.getItem('token');
+fetch('http://localhost:3100/users/support/link', {
+  method: 'GET',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  if (data.data.isActive) {
+    console.log('Support Link:', data.data.supportLink);
+    console.log('Support Email:', data.data.supportEmail);
+    console.log('Support Phone:', data.data.supportPhone);
+    console.log('Support WhatsApp:', data.data.supportWhatsApp);
+    console.log('Description:', data.data.description);
+  } else {
+    console.log('Support is currently unavailable');
+  }
+})
+.catch(error => console.error('Error:', error));
+```
+
+---
+
+## Notes for Support Link System
+
+- Support link API requires JWT token authentication
+- Support information is managed by admin through admin APIs
+- Users can access support link, email, phone, and WhatsApp
+- Support can be activated/deactivated by admin
+- If support is inactive, users see a message that support is unavailable
+- All support fields are optional and may be null
+- Support link must be a valid URL (validated by admin)
+- Support email must be a valid email format (validated by admin)

@@ -19,6 +19,11 @@ let scratchCardDailyLimitSettingsModel = require('../models/scratchCardDailyLimi
 let scratchCardDailyLimitClaimModel = require('../models/scratchCardDailyLimitClaim.model')
 let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
 let signupBonusSettingsModel = require('../models/signupBonusSettings.model')
+let commissionSlabSettingsModel = require('../models/commissionSlabSettings.model')
+let captchaSolveModel = require('../models/captchaSolve.model')
+let dailyBonusClaimModel = require('../models/dailyBonusClaim.model')
+let sponsorPromotionSubmissionModel = require('../models/sponsorPromotionSubmission.model')
+let supportLinkSettingsModel = require('../models/supportLinkSettings.model')
 
 // Admin Signup API
 router.post('/signup', async (req, res) => {
@@ -685,6 +690,274 @@ router.get('/users', verifyToken, async (req, res) => {
 
   } catch (err) {
     console.error('Get All Users - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== USERS EARNINGS API ====================
+
+// Get All Users with Earnings API (MUST be before /users/:userId route)
+router.get('/users/earnings', verifyAdminToken, async (req, res) => {
+  try {
+    const { page = 1, limit = 50, search, sortBy = 'totalEarnings' } = req.query
+    
+    // Build query
+    let query = {}
+    if (search) {
+      query.$or = [
+        { UserName: { $regex: search, $options: 'i' } },
+        { MobileNumber: { $regex: search, $options: 'i' } },
+        { ReferCode: { $regex: search, $options: 'i' } }
+      ]
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page)
+    const limitNum = parseInt(limit)
+    const skip = (pageNum - 1) * limitNum
+
+    // Get total count for pagination
+    const totalUsers = await userModel.countDocuments(query)
+
+    // Get users with pagination
+    const users = await userModel.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+
+    // Calculate earnings for each user
+    const usersWithEarnings = await Promise.all(users.map(async (user) => {
+      // Get referral count
+      const referralCount = await userModel.countDocuments({ ReferredBy: user.ReferCode })
+      
+      // Get approved app installations earnings
+      const appSubmissions = await appInstallationSubmissionModel.find({ 
+        UserId: user._id, 
+        Status: 'Approved' 
+      }).populate('AppId', 'RewardCoins')
+      const appEarnings = appSubmissions.reduce((sum, sub) => sum + (sub.AppId?.RewardCoins || 0), 0)
+      
+      // Get scratch card earnings
+      const scratchCardClaims = await scratchCardClaimModel.find({ UserId: user._id })
+      const scratchCardEarnings = scratchCardClaims.reduce((sum, claim) => sum + (claim.RewardAmount || 0), 0)
+      
+      // Get captcha earnings
+      const captchaSolves = await captchaSolveModel.find({ UserId: user._id })
+      const captchaEarnings = captchaSolves.reduce((sum, solve) => sum + (solve.RewardAmount || 0), 0)
+      
+      // Get daily bonus earnings
+      const dailyBonusClaims = await dailyBonusClaimModel.find({ UserId: user._id })
+      const dailyBonusEarnings = dailyBonusClaims.reduce((sum, claim) => sum + (claim.Amount || 0), 0)
+      
+      // Calculate total earnings (coins + wallet balance)
+      const totalEarnings = (user.Coins || 0) + (user.WalletBalance || 0)
+      
+      // Calculate referral earnings (if user referred others)
+      const referralSettings = await referralSettingsModel.findOne()
+      const referralEarnings = referralCount * (referralSettings?.RewardForReferrer || 0)
+
+      return {
+        userId: user._id,
+        userName: user.UserName,
+        mobileNumber: user.MobileNumber,
+        referCode: user.ReferCode,
+        coins: user.Coins || 0,
+        walletBalance: user.WalletBalance || 0,
+        totalEarnings: totalEarnings,
+        earningsBreakdown: {
+          coins: user.Coins || 0,
+          walletBalance: user.WalletBalance || 0,
+          appInstallations: appEarnings,
+          scratchCards: scratchCardEarnings,
+          captcha: captchaEarnings,
+          dailyBonus: dailyBonusEarnings,
+          referralEarnings: referralEarnings
+        },
+        referralCount: referralCount,
+        referredBy: user.ReferredBy || null,
+        signupTime: user.SignupTime,
+        lastLoginTime: user.LastLoginTime,
+        isBlocked: user.IsBlocked || false,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }
+    }))
+
+    // Sort by sortBy parameter
+    if (sortBy === 'totalEarnings') {
+      usersWithEarnings.sort((a, b) => b.totalEarnings - a.totalEarnings)
+    } else if (sortBy === 'coins') {
+      usersWithEarnings.sort((a, b) => b.coins - a.coins)
+    } else if (sortBy === 'walletBalance') {
+      usersWithEarnings.sort((a, b) => b.walletBalance - a.walletBalance)
+    } else if (sortBy === 'referralCount') {
+      usersWithEarnings.sort((a, b) => b.referralCount - a.referralCount)
+    }
+
+    // Calculate total statistics
+    const totalStats = usersWithEarnings.reduce((acc, user) => {
+      acc.totalCoins += user.coins
+      acc.totalWalletBalance += user.walletBalance
+      acc.totalEarnings += user.totalEarnings
+      acc.totalReferrals += user.referralCount
+      return acc
+    }, { totalCoins: 0, totalWalletBalance: 0, totalEarnings: 0, totalReferrals: 0 })
+
+    return res.json({
+      message: "Users with earnings retrieved successfully",
+      data: {
+        users: usersWithEarnings,
+        pagination: {
+          currentPage: pageNum,
+          totalPages: Math.ceil(totalUsers / limitNum),
+          totalUsers: totalUsers,
+          limit: limitNum,
+          hasNextPage: pageNum < Math.ceil(totalUsers / limitNum),
+          hasPrevPage: pageNum > 1
+        },
+        statistics: totalStats
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Users Earnings - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== USERS EARNINGS API ====================
+
+// Get All Users with Earnings API (MUST be before /users/:userId route)
+router.get('/users/earnings', verifyAdminToken, async (req, res) => {
+  try {
+    const { page = 1, limit = 50, search, sortBy = 'totalEarnings' } = req.query
+    
+    // Build query
+    let query = {}
+    if (search) {
+      query.$or = [
+        { UserName: { $regex: search, $options: 'i' } },
+        { MobileNumber: { $regex: search, $options: 'i' } },
+        { ReferCode: { $regex: search, $options: 'i' } }
+      ]
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page)
+    const limitNum = parseInt(limit)
+    const skip = (pageNum - 1) * limitNum
+
+    // Get total count for pagination
+    const totalUsers = await userModel.countDocuments(query)
+
+    // Get users with pagination
+    const users = await userModel.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+
+    // Calculate earnings for each user
+    const usersWithEarnings = await Promise.all(users.map(async (user) => {
+      // Get referral count
+      const referralCount = await userModel.countDocuments({ ReferredBy: user.ReferCode })
+      
+      // Get approved app installations earnings
+      const appSubmissions = await appInstallationSubmissionModel.find({ 
+        UserId: user._id, 
+        Status: 'Approved' 
+      }).populate('AppId', 'RewardCoins')
+      const appEarnings = appSubmissions.reduce((sum, sub) => sum + (sub.AppId?.RewardCoins || 0), 0)
+      
+      // Get scratch card earnings
+      const scratchCardClaims = await scratchCardClaimModel.find({ UserId: user._id })
+      const scratchCardEarnings = scratchCardClaims.reduce((sum, claim) => sum + (claim.RewardAmount || 0), 0)
+      
+      // Get captcha earnings
+      const captchaSolves = await captchaSolveModel.find({ UserId: user._id })
+      const captchaEarnings = captchaSolves.reduce((sum, solve) => sum + (solve.RewardAmount || 0), 0)
+      
+      // Get daily bonus earnings
+      const dailyBonusClaims = await dailyBonusClaimModel.find({ UserId: user._id })
+      const dailyBonusEarnings = dailyBonusClaims.reduce((sum, claim) => sum + (claim.Amount || 0), 0)
+      
+      // Calculate total earnings (coins + wallet balance)
+      const totalEarnings = (user.Coins || 0) + (user.WalletBalance || 0)
+      
+      // Calculate referral earnings (if user referred others)
+      const referralSettings = await referralSettingsModel.findOne()
+      const referralEarnings = referralCount * (referralSettings?.RewardForReferrer || 0)
+
+      return {
+        userId: user._id,
+        userName: user.UserName,
+        mobileNumber: user.MobileNumber,
+        referCode: user.ReferCode,
+        coins: user.Coins || 0,
+        walletBalance: user.WalletBalance || 0,
+        totalEarnings: totalEarnings,
+        earningsBreakdown: {
+          coins: user.Coins || 0,
+          walletBalance: user.WalletBalance || 0,
+          appInstallations: appEarnings,
+          scratchCards: scratchCardEarnings,
+          captcha: captchaEarnings,
+          dailyBonus: dailyBonusEarnings,
+          referralEarnings: referralEarnings
+        },
+        referralCount: referralCount,
+        referredBy: user.ReferredBy || null,
+        signupTime: user.SignupTime,
+        lastLoginTime: user.LastLoginTime,
+        isBlocked: user.IsBlocked || false,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }
+    }))
+
+    // Sort by sortBy parameter
+    if (sortBy === 'totalEarnings') {
+      usersWithEarnings.sort((a, b) => b.totalEarnings - a.totalEarnings)
+    } else if (sortBy === 'coins') {
+      usersWithEarnings.sort((a, b) => b.coins - a.coins)
+    } else if (sortBy === 'walletBalance') {
+      usersWithEarnings.sort((a, b) => b.walletBalance - a.walletBalance)
+    } else if (sortBy === 'referralCount') {
+      usersWithEarnings.sort((a, b) => b.referralCount - a.referralCount)
+    }
+
+    // Calculate total statistics
+    const totalStats = usersWithEarnings.reduce((acc, user) => {
+      acc.totalCoins += user.coins
+      acc.totalWalletBalance += user.walletBalance
+      acc.totalEarnings += user.totalEarnings
+      acc.totalReferrals += user.referralCount
+      return acc
+    }, { totalCoins: 0, totalWalletBalance: 0, totalEarnings: 0, totalReferrals: 0 })
+
+    return res.json({
+      message: "Users with earnings retrieved successfully",
+      data: {
+        users: usersWithEarnings,
+        pagination: {
+          currentPage: pageNum,
+          totalPages: Math.ceil(totalUsers / limitNum),
+          totalUsers: totalUsers,
+          limit: limitNum,
+          hasNextPage: pageNum < Math.ceil(totalUsers / limitNum),
+          hasPrevPage: pageNum > 1
+        },
+        statistics: totalStats
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Users Earnings - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
@@ -2193,6 +2466,757 @@ router.get('/dashboard', verifyAdminToken, async (req, res) => {
   } catch (err) {
     console.error('Get Dashboard Statistics - Error:', err)
     console.error('Get Dashboard Statistics - Error Stack:', err.stack)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== COMMISSION SLAB SETTINGS APIs ====================
+
+// Create Commission Slab API
+router.post('/commission/slabs', verifyAdminToken, async (req, res) => {
+  try {
+    const { SlabName, MinEarnings, MaxEarnings, CommissionPercentage, RewardType, IsActive, Order, CommissionBasedOn } = req.body
+    
+    if (!SlabName || MinEarnings === undefined || CommissionPercentage === undefined) {
+      return res.status(400).json({
+        message: "SlabName, MinEarnings, and CommissionPercentage are required"
+      })
+    }
+
+    if (MinEarnings < 0) {
+      return res.status(400).json({
+        message: "MinEarnings must be 0 or greater"
+      })
+    }
+
+    if (MaxEarnings !== null && MaxEarnings !== undefined && MaxEarnings <= MinEarnings) {
+      return res.status(400).json({
+        message: "MaxEarnings must be greater than MinEarnings"
+      })
+    }
+
+    if (CommissionPercentage < 0 || CommissionPercentage > 100) {
+      return res.status(400).json({
+        message: "CommissionPercentage must be between 0 and 100"
+      })
+    }
+
+    const validRewardTypes = ['Coins', 'WalletBalance']
+    const rewardType = RewardType || 'Coins'
+    
+    if (!validRewardTypes.includes(rewardType)) {
+      return res.status(400).json({
+        message: "RewardType must be either 'Coins' or 'WalletBalance'"
+      })
+    }
+
+    const validCommissionBasis = ['ReferredUserWalletBalance', 'WithdrawalRequestAmount', 'WithdrawalRequestTime']
+    const commissionBasedOn = CommissionBasedOn || 'ReferredUserWalletBalance'
+    
+    if (!validCommissionBasis.includes(commissionBasedOn)) {
+      return res.status(400).json({
+        message: "CommissionBasedOn must be one of: ReferredUserWalletBalance, WithdrawalRequestAmount, WithdrawalRequestTime"
+      })
+    }
+
+    // Check for overlapping slabs
+    const existingSlabs = await commissionSlabSettingsModel.find({ IsActive: true })
+    for (const slab of existingSlabs) {
+      const slabMin = slab.MinEarnings
+      const slabMax = slab.MaxEarnings || Infinity
+      const newMin = MinEarnings
+      const newMax = MaxEarnings || Infinity
+
+      if ((newMin >= slabMin && newMin < slabMax) || 
+          (newMax > slabMin && newMax <= slabMax) ||
+          (newMin <= slabMin && newMax >= slabMax)) {
+        return res.status(400).json({
+          message: `Slab overlaps with existing slab "${slab.SlabName}" (${slab.MinEarnings} - ${slab.MaxEarnings || '∞'})`
+        })
+      }
+    }
+
+    const slab = await commissionSlabSettingsModel.create({
+      SlabName: SlabName.trim(),
+      MinEarnings: MinEarnings,
+      MaxEarnings: MaxEarnings || null,
+      CommissionPercentage: CommissionPercentage,
+      RewardType: rewardType,
+      IsActive: IsActive !== undefined ? IsActive : true,
+      Order: Order !== undefined ? Order : 0,
+      CommissionBasedOn: commissionBasedOn
+    })
+
+    return res.json({
+      message: "Commission slab created successfully",
+      data: slab
+    })
+
+  } catch (err) {
+    console.error('Create Commission Slab - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get All Commission Slabs API
+router.get('/commission/slabs', verifyAdminToken, async (req, res) => {
+  try {
+    const slabs = await commissionSlabSettingsModel.find()
+      .sort({ Order: 1, MinEarnings: 1 })
+
+    return res.json({
+      message: "Commission slabs retrieved successfully",
+      data: {
+        slabs: slabs,
+        totalSlabs: slabs.length,
+        activeSlabs: slabs.filter(s => s.IsActive).length
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Commission Slabs - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Update Commission Slab API
+router.put('/commission/slabs/:slabId', verifyAdminToken, async (req, res) => {
+  try {
+    const { slabId } = req.params
+    const { SlabName, MinEarnings, MaxEarnings, CommissionPercentage, RewardType, IsActive, Order, CommissionBasedOn } = req.body
+
+    const slab = await commissionSlabSettingsModel.findById(slabId)
+    if (!slab) {
+      return res.status(404).json({
+        message: "Commission slab not found"
+      })
+    }
+
+    // Validate if provided
+    if (MinEarnings !== undefined && MinEarnings < 0) {
+      return res.status(400).json({
+        message: "MinEarnings must be 0 or greater"
+      })
+    }
+
+    if (MaxEarnings !== null && MaxEarnings !== undefined) {
+      const finalMinEarnings = MinEarnings !== undefined ? MinEarnings : slab.MinEarnings
+      if (MaxEarnings <= finalMinEarnings) {
+        return res.status(400).json({
+          message: "MaxEarnings must be greater than MinEarnings"
+        })
+      }
+    }
+
+    if (CommissionPercentage !== undefined && (CommissionPercentage < 0 || CommissionPercentage > 100)) {
+      return res.status(400).json({
+        message: "CommissionPercentage must be between 0 and 100"
+      })
+    }
+
+    if (RewardType && !['Coins', 'WalletBalance'].includes(RewardType)) {
+      return res.status(400).json({
+        message: "RewardType must be either 'Coins' or 'WalletBalance'"
+      })
+    }
+
+    if (CommissionBasedOn && !['ReferredUserWalletBalance', 'WithdrawalRequestAmount', 'WithdrawalRequestTime'].includes(CommissionBasedOn)) {
+      return res.status(400).json({
+        message: "CommissionBasedOn must be one of: ReferredUserWalletBalance, WithdrawalRequestAmount, WithdrawalRequestTime"
+      })
+    }
+
+    // Check for overlapping slabs (excluding current slab)
+    if (MinEarnings !== undefined || MaxEarnings !== undefined) {
+      const finalMin = MinEarnings !== undefined ? MinEarnings : slab.MinEarnings
+      const finalMax = MaxEarnings !== undefined ? (MaxEarnings || null) : slab.MaxEarnings
+
+      const existingSlabs = await commissionSlabSettingsModel.find({ 
+        _id: { $ne: slabId },
+        IsActive: true 
+      })
+      
+      for (const existingSlab of existingSlabs) {
+        const slabMin = existingSlab.MinEarnings
+        const slabMax = existingSlab.MaxEarnings || Infinity
+        const newMin = finalMin
+        const newMax = finalMax || Infinity
+
+        if ((newMin >= slabMin && newMin < slabMax) || 
+            (newMax > slabMin && newMax <= slabMax) ||
+            (newMin <= slabMin && newMax >= slabMax)) {
+          return res.status(400).json({
+            message: `Slab overlaps with existing slab "${existingSlab.SlabName}" (${existingSlab.MinEarnings} - ${existingSlab.MaxEarnings || '∞'})`
+          })
+        }
+      }
+    }
+
+    // Update fields
+    if (SlabName !== undefined) slab.SlabName = SlabName.trim()
+    if (MinEarnings !== undefined) slab.MinEarnings = MinEarnings
+    if (MaxEarnings !== undefined) slab.MaxEarnings = MaxEarnings || null
+    if (CommissionPercentage !== undefined) slab.CommissionPercentage = CommissionPercentage
+    if (RewardType !== undefined) slab.RewardType = RewardType
+    if (IsActive !== undefined) slab.IsActive = IsActive
+    if (Order !== undefined) slab.Order = Order
+    if (CommissionBasedOn !== undefined) slab.CommissionBasedOn = CommissionBasedOn
+
+    await slab.save()
+
+    return res.json({
+      message: "Commission slab updated successfully",
+      data: slab
+    })
+
+  } catch (err) {
+    console.error('Update Commission Slab - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Delete Commission Slab API
+router.delete('/commission/slabs/:slabId', verifyAdminToken, async (req, res) => {
+  try {
+    const { slabId } = req.params
+
+    const slab = await commissionSlabSettingsModel.findById(slabId)
+    if (!slab) {
+      return res.status(404).json({
+        message: "Commission slab not found"
+      })
+    }
+
+    await commissionSlabSettingsModel.findByIdAndDelete(slabId)
+
+    return res.json({
+      message: "Commission slab deleted successfully"
+    })
+
+  } catch (err) {
+    console.error('Delete Commission Slab - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Update Referral Settings to support percentage
+router.post('/referral/settings', verifyAdminToken, async (req, res) => {
+  try {
+    const { RewardForNewUser, RewardForReferrer, RewardType, UsePercentage, ReferrerPercentage, PercentageBasedOn } = req.body
+    
+    if (RewardForNewUser === undefined || RewardForReferrer === undefined) {
+      return res.status(400).json({
+        message: "RewardForNewUser and RewardForReferrer are required"
+      })
+    }
+
+    if (RewardForNewUser < 0 || RewardForReferrer < 0) {
+      return res.status(400).json({
+        message: "Reward amounts must be 0 or greater"
+      })
+    }
+
+    const validRewardTypes = ['Coins', 'WalletBalance']
+    const rewardType = RewardType || 'Coins'
+    
+    if (!validRewardTypes.includes(rewardType)) {
+      return res.status(400).json({
+        message: "RewardType must be either 'Coins' or 'WalletBalance'"
+      })
+    }
+
+    // Validate percentage fields if UsePercentage is true
+    if (UsePercentage === true) {
+      if (ReferrerPercentage === undefined || ReferrerPercentage < 0 || ReferrerPercentage > 100) {
+        return res.status(400).json({
+          message: "ReferrerPercentage must be between 0 and 100 when UsePercentage is true"
+        })
+      }
+      if (!PercentageBasedOn || !['SignupBonus', 'TotalEarnings', 'WalletBalance'].includes(PercentageBasedOn)) {
+        return res.status(400).json({
+          message: "PercentageBasedOn must be one of: SignupBonus, TotalEarnings, WalletBalance"
+        })
+      }
+    }
+
+    // Update or create settings
+    let settings = await referralSettingsModel.findOne()
+    if (settings) {
+      settings.RewardForNewUser = RewardForNewUser
+      settings.RewardForReferrer = RewardForReferrer
+      settings.RewardType = rewardType
+      if (UsePercentage !== undefined) settings.UsePercentage = UsePercentage
+      if (ReferrerPercentage !== undefined) settings.ReferrerPercentage = ReferrerPercentage
+      if (PercentageBasedOn !== undefined) settings.PercentageBasedOn = PercentageBasedOn
+      await settings.save()
+    } else {
+      settings = await referralSettingsModel.create({
+        RewardForNewUser: RewardForNewUser,
+        RewardForReferrer: RewardForReferrer,
+        RewardType: rewardType,
+        UsePercentage: UsePercentage || false,
+        ReferrerPercentage: ReferrerPercentage || 0,
+        PercentageBasedOn: PercentageBasedOn || 'SignupBonus'
+      })
+    }
+
+    return res.json({
+      message: "Referral settings updated successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== SPONSOR PROMOTION SUBMISSION APIs ====================
+
+// Get All Sponsor Promotion Submissions API
+router.get('/sponsor/promotions', verifyAdminToken, async (req, res) => {
+  try {
+    const { status, userId, page = 1, limit = 50, search } = req.query
+    
+    // Build query
+    let query = {}
+    if (status && ['Pending', 'Approved', 'Rejected'].includes(status)) {
+      query.Status = status
+    }
+    if (userId) {
+      query.UserId = userId
+    }
+    if (search) {
+      query.$or = [
+        { SponsorName: { $regex: search, $options: 'i' } },
+        { MobileNumber: { $regex: search, $options: 'i' } },
+        { Email: { $regex: search, $options: 'i' } },
+        { AppPromotion: { $regex: search, $options: 'i' } }
+      ]
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page)
+    const limitNum = parseInt(limit)
+    const skip = (pageNum - 1) * limitNum
+
+    // Get total count for pagination
+    const totalSubmissions = await sponsorPromotionSubmissionModel.countDocuments(query)
+
+    // Get submissions with pagination
+    const submissions = await sponsorPromotionSubmissionModel.find(query)
+      .populate('UserId', 'UserName MobileNumber ReferCode')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+
+    // Format response
+    const formattedSubmissions = submissions.map(sub => ({
+      submissionId: sub._id,
+      userId: sub.UserId._id,
+      userName: sub.UserId.UserName,
+      userMobileNumber: sub.UserId.MobileNumber,
+      userReferCode: sub.UserId.ReferCode,
+      sponsorName: sub.SponsorName,
+      mobileNumber: sub.MobileNumber,
+      email: sub.Email,
+      appPromotion: sub.AppPromotion,
+      status: sub.Status,
+      adminNotes: sub.AdminNotes,
+      createdAt: sub.createdAt,
+      updatedAt: sub.updatedAt
+    }))
+
+    // Calculate statistics
+    const allSubmissions = await sponsorPromotionSubmissionModel.find({})
+    const statistics = {
+      total: allSubmissions.length,
+      pending: allSubmissions.filter(s => s.Status === 'Pending').length,
+      approved: allSubmissions.filter(s => s.Status === 'Approved').length,
+      rejected: allSubmissions.filter(s => s.Status === 'Rejected').length
+    }
+
+    return res.json({
+      message: "Sponsor promotion submissions retrieved successfully",
+      data: {
+        submissions: formattedSubmissions,
+        pagination: {
+          currentPage: pageNum,
+          totalPages: Math.ceil(totalSubmissions / limitNum),
+          totalSubmissions: totalSubmissions,
+          limit: limitNum,
+          hasNextPage: pageNum < Math.ceil(totalSubmissions / limitNum),
+          hasPrevPage: pageNum > 1
+        },
+        statistics: statistics
+      }
+    })
+
+  } catch (err) {
+    console.error('Get Sponsor Promotion Submissions - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Approve/Reject Sponsor Promotion Submission API
+router.post('/sponsor/promotions/:submissionId/status', verifyAdminToken, async (req, res) => {
+  try {
+    const { submissionId } = req.params
+    const { status, adminNotes } = req.body
+
+    // Validate status
+    if (!status || !['Approved', 'Rejected'].includes(status)) {
+      return res.status(400).json({
+        message: "Status is required and must be either 'Approved' or 'Rejected'"
+      })
+    }
+
+    // Find submission
+    const submission = await sponsorPromotionSubmissionModel.findById(submissionId)
+      .populate('UserId', 'UserName MobileNumber ReferCode')
+
+    if (!submission) {
+      return res.status(404).json({
+        message: "Sponsor promotion submission not found"
+      })
+    }
+
+    // Check if already processed
+    if (submission.Status !== 'Pending') {
+      return res.status(400).json({
+        message: `This submission has already been ${submission.Status.toLowerCase()}`
+      })
+    }
+
+    // Update submission status
+    submission.Status = status
+    if (adminNotes) {
+      submission.AdminNotes = adminNotes
+    }
+    await submission.save()
+
+    return res.json({
+      message: `Sponsor promotion submission ${status.toLowerCase()} successfully`,
+      data: {
+        submissionId: submission._id,
+        sponsorName: submission.SponsorName,
+        mobileNumber: submission.MobileNumber,
+        email: submission.Email,
+        appPromotion: submission.AppPromotion,
+        status: submission.Status,
+        adminNotes: submission.AdminNotes,
+        userName: submission.UserId.UserName,
+        userMobileNumber: submission.UserId.MobileNumber,
+        updatedAt: submission.updatedAt
+      }
+    })
+
+  } catch (err) {
+    console.error('Update Sponsor Promotion Submission Status - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== CRON JOBS MANAGEMENT APIs ====================
+
+// Manual Daily Reset API (Admin can trigger daily reset manually)
+router.post('/cron/daily-reset', verifyAdminToken, async (req, res) => {
+  try {
+    const { startCronJobs, dailyResetJob } = require('../utilities/cronJobs');
+    
+    // Manually trigger the daily reset job
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    today.setMilliseconds(0);
+    
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const scratchCardDailyLimitClaimModel = require('../models/scratchCardDailyLimitClaim.model');
+    const dailySpinUsageModel = require('../models/dailySpinUsage.model');
+    const captchaSolveModel = require('../models/captchaSolve.model');
+
+    // Get statistics
+    const scratchCardClaimsToday = await scratchCardDailyLimitClaimModel.countDocuments({
+      ClaimDate: { $gte: today }
+    });
+    const scratchCardClaimsYesterday = await scratchCardDailyLimitClaimModel.countDocuments({
+      ClaimDate: { $gte: yesterday, $lt: today }
+    });
+
+    const spinUsageToday = await dailySpinUsageModel.countDocuments({
+      SpinDate: { $gte: today }
+    });
+    const spinUsageYesterday = await dailySpinUsageModel.countDocuments({
+      SpinDate: { $gte: yesterday, $lt: today }
+    });
+
+    const captchaSolvesToday = await captchaSolveModel.countDocuments({
+      SolveDate: { $gte: today }
+    });
+    const captchaSolvesYesterday = await captchaSolveModel.countDocuments({
+      SolveDate: { $gte: yesterday, $lt: today }
+    });
+
+    return res.json({
+      message: "Daily reset status retrieved successfully",
+      data: {
+        resetTime: new Date().toISOString(),
+        today: today.toISOString(),
+        yesterday: yesterday.toISOString(),
+        statistics: {
+          scratchCard: {
+            today: scratchCardClaimsToday,
+            yesterday: scratchCardClaimsYesterday
+          },
+          dailySpin: {
+            today: spinUsageToday,
+            yesterday: spinUsageYesterday
+          },
+          captcha: {
+            today: captchaSolvesToday,
+            yesterday: captchaSolvesYesterday
+          }
+        },
+        note: "Daily limits automatically reset at midnight. This shows current status."
+      }
+    });
+
+  } catch (err) {
+    console.error('Manual Daily Reset - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get Cron Jobs Status API
+router.get('/cron/status', verifyAdminToken, async (req, res) => {
+  try {
+    const { dailyResetJob, cleanupOldRecordsJob } = require('../utilities/cronJobs');
+    
+    return res.json({
+      message: "Cron jobs status retrieved successfully",
+      data: {
+        dailyResetJob: {
+          scheduled: dailyResetJob.running || false,
+          schedule: "0 0 * * * (Daily at 00:00)",
+          description: "Verifies daily limit resets for scratch cards, spins, and captcha"
+        },
+        cleanupOldRecordsJob: {
+          scheduled: cleanupOldRecordsJob.running || false,
+          schedule: "0 1 * * * (Daily at 01:00)",
+          description: "Cleans up old records older than 90 days"
+        },
+        note: "Cron jobs automatically start when the server starts and database is connected"
+      }
+    });
+
+  } catch (err) {
+    console.error('Get Cron Jobs Status - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== SUPPORT LINK SETTINGS APIs ====================
+
+// Set Support Link API
+router.post('/support/link', verifyAdminToken, async (req, res) => {
+  try {
+    const { SupportLink, SupportEmail, SupportPhone, SupportWhatsApp, IsActive, Description } = req.body
+    
+    if (!SupportLink) {
+      return res.status(400).json({
+        message: "SupportLink is required"
+      })
+    }
+
+    if (typeof SupportLink !== 'string' || SupportLink.trim().length === 0) {
+      return res.status(400).json({
+        message: "SupportLink must be a valid non-empty string"
+      })
+    }
+
+    // Validate URL format (basic validation)
+    try {
+      new URL(SupportLink.trim())
+    } catch (urlError) {
+      return res.status(400).json({
+        message: "SupportLink must be a valid URL"
+      })
+    }
+
+    // Validate email if provided
+    if (SupportEmail && SupportEmail.trim().length > 0) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(SupportEmail.trim())) {
+        return res.status(400).json({
+          message: "SupportEmail must be a valid email address"
+        })
+      }
+    }
+
+    // Update or create settings
+    let settings = await supportLinkSettingsModel.findOne()
+    if (settings) {
+      settings.SupportLink = SupportLink.trim()
+      if (SupportEmail !== undefined) settings.SupportEmail = SupportEmail ? SupportEmail.trim().toLowerCase() : null
+      if (SupportPhone !== undefined) settings.SupportPhone = SupportPhone ? SupportPhone.trim() : null
+      if (SupportWhatsApp !== undefined) settings.SupportWhatsApp = SupportWhatsApp ? SupportWhatsApp.trim() : null
+      if (IsActive !== undefined) settings.IsActive = IsActive
+      if (Description !== undefined) settings.Description = Description ? Description.trim() : null
+      await settings.save()
+    } else {
+      settings = await supportLinkSettingsModel.create({
+        SupportLink: SupportLink.trim(),
+        SupportEmail: SupportEmail ? SupportEmail.trim().toLowerCase() : null,
+        SupportPhone: SupportPhone ? SupportPhone.trim() : null,
+        SupportWhatsApp: SupportWhatsApp ? SupportWhatsApp.trim() : null,
+        IsActive: IsActive !== undefined ? IsActive : true,
+        Description: Description ? Description.trim() : null
+      })
+    }
+
+    return res.json({
+      message: "Support link settings updated successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    console.error('Set Support Link - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get Support Link Settings API
+router.get('/support/link', verifyAdminToken, async (req, res) => {
+  try {
+    let settings = await supportLinkSettingsModel.getSettings()
+
+    return res.json({
+      message: "Support link settings retrieved successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    console.error('Get Support Link - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Update Support Link API
+router.put('/support/link', verifyAdminToken, async (req, res) => {
+  try {
+    const { SupportLink, SupportEmail, SupportPhone, SupportWhatsApp, IsActive, Description } = req.body
+
+    let settings = await supportLinkSettingsModel.findOne()
+    if (!settings) {
+      // If no settings exist, create new one
+      if (!SupportLink) {
+        return res.status(400).json({
+          message: "SupportLink is required when creating new settings"
+        })
+      }
+      settings = await supportLinkSettingsModel.create({
+        SupportLink: SupportLink.trim(),
+        SupportEmail: SupportEmail ? SupportEmail.trim().toLowerCase() : null,
+        SupportPhone: SupportPhone ? SupportPhone.trim() : null,
+        SupportWhatsApp: SupportWhatsApp ? SupportWhatsApp.trim() : null,
+        IsActive: IsActive !== undefined ? IsActive : true,
+        Description: Description ? Description.trim() : null
+      })
+    } else {
+      // Update existing settings
+      if (SupportLink !== undefined) {
+        if (typeof SupportLink !== 'string' || SupportLink.trim().length === 0) {
+          return res.status(400).json({
+            message: "SupportLink must be a valid non-empty string"
+          })
+        }
+        // Validate URL format
+        try {
+          new URL(SupportLink.trim())
+        } catch (urlError) {
+          return res.status(400).json({
+            message: "SupportLink must be a valid URL"
+          })
+        }
+        settings.SupportLink = SupportLink.trim()
+      }
+
+      if (SupportEmail !== undefined) {
+        if (SupportEmail && SupportEmail.trim().length > 0) {
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+          if (!emailRegex.test(SupportEmail.trim())) {
+            return res.status(400).json({
+              message: "SupportEmail must be a valid email address"
+            })
+          }
+          settings.SupportEmail = SupportEmail.trim().toLowerCase()
+        } else {
+          settings.SupportEmail = null
+        }
+      }
+
+      if (SupportPhone !== undefined) {
+        settings.SupportPhone = SupportPhone ? SupportPhone.trim() : null
+      }
+
+      if (SupportWhatsApp !== undefined) {
+        settings.SupportWhatsApp = SupportWhatsApp ? SupportWhatsApp.trim() : null
+      }
+
+      if (IsActive !== undefined) {
+        settings.IsActive = IsActive
+      }
+
+      if (Description !== undefined) {
+        settings.Description = Description ? Description.trim() : null
+      }
+
+      await settings.save()
+    }
+
+    return res.json({
+      message: "Support link settings updated successfully",
+      data: settings
+    })
+
+  } catch (err) {
+    console.error('Update Support Link - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
