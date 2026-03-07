@@ -41,8 +41,15 @@ router.get('/refer/:referCode', async (req, res) => {
     const appPackage = 'com.profitkaro'
     const referCodeUpper = referCode.trim().toUpperCase()
     
-    // Play Store URL with referrer parameter (properly encoded)
-    const playStoreUrl = `https://play.google.com/store/apps/details?id=${appPackage}&referrer=${encodeURIComponent(referCodeUpper)}`
+    // Play Store URL with referrer parameter (properly formatted for install referrer)
+    // Format: referrer=code=ABC123 (this is what Flutter app expects)
+    // The Flutter app can parse both: direct code "ABC123" or "code=ABC123"
+    const referrerParam = `code=${referCodeUpper}`
+    const playStoreUrl = `https://play.google.com/store/apps/details?id=${appPackage}&referrer=${encodeURIComponent(referrerParam)}`
+    
+    // Alternative format with utm_source (also supported by Flutter)
+    // const referrerParam = `utm_source=referral&code=${referCodeUpper}`
+    // const playStoreUrl = `https://play.google.com/store/apps/details?id=${appPackage}&referrer=${encodeURIComponent(referrerParam)}`
     
     // Intent URL with multiple parameter formats for better compatibility
     // Format: intent://[host]/[path]?[parameters]#Intent;scheme=[scheme];package=[package];S.[key]=[value];end
