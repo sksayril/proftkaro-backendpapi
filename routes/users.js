@@ -91,13 +91,6 @@ router.post('/signup', async (req, res) => {
       })
     }
 
-    // Validate DeviceId is required
-    if (!DeviceId || typeof DeviceId !== 'string' || DeviceId.trim().length === 0) {
-      return res.status(400).json({
-        message: "DeviceId is required"
-      })
-    }
-
     // Validate MobileNumber format (basic validation)
     if (typeof MobileNumber !== 'string' || MobileNumber.trim().length === 0) {
       return res.status(400).json({
@@ -132,15 +125,7 @@ router.post('/signup', async (req, res) => {
     let checkMobile = await userModel.findOne({ MobileNumber: MobileNumber.trim() })
     if (checkMobile) {
       return res.status(400).json({
-        message: "User with this MobileNumber already exists"
-      })
-    }
-
-    // Check if DeviceId already exists (one device per user)
-    let checkDevice = await userModel.findOne({ DeviceId: DeviceId.trim() })
-    if (checkDevice) {
-      return res.status(400).json({
-        message: "DeviceId already registered. This device is already associated with another account."
+        message: "Mobile number already registered"
       })
     }
 
@@ -290,17 +275,23 @@ router.post('/signup', async (req, res) => {
     // Create user
     let User_data;
     try {
-      User_data = await userModel.create({
+      const userDataToCreate = {
         UserName: UserName.trim(),
         MobileNumber: MobileNumber.trim(),
         Password: encryptedPassword,
-        DeviceId: DeviceId.trim(),
         ReferCode: referCode,
         ReferredBy: referredBy,
         Coins: initialCoins,
         WalletBalance: initialWalletBalance,
         SignupTime: new Date()
-      })
+      }
+      
+      // Only add DeviceId if provided (optional)
+      if (DeviceId && typeof DeviceId === 'string' && DeviceId.trim().length > 0) {
+        userDataToCreate.DeviceId = DeviceId.trim()
+      }
+      
+      User_data = await userModel.create(userDataToCreate)
     } catch (createError) {
       console.error('Signup Error - User creation failed:', createError);
       
@@ -313,11 +304,7 @@ router.post('/signup', async (req, res) => {
           })
         } else if (field === 'MobileNumber') {
           return res.status(400).json({
-            message: "User with this MobileNumber already exists"
-          })
-        } else if (field === 'DeviceId') {
-          return res.status(400).json({
-            message: "DeviceId already registered. This device is already associated with another account."
+            message: "Mobile number already registered"
           })
         } else if (field === 'ReferCode') {
           // Retry with new refer code (shouldn't happen, but handle it)
@@ -399,18 +386,11 @@ router.post('/signup', async (req, res) => {
 // User Login API
 router.post('/login', async (req, res) => {
   try {
-    let { MobileNumber, Password, DeviceId } = req.body
+    let { MobileNumber, Password } = req.body
     
     if (!MobileNumber || !Password) {
       return res.status(400).json({
         message: "MobileNumber and Password are required"
-      })
-    }
-
-    // Validate DeviceId is required
-    if (!DeviceId || typeof DeviceId !== 'string' || DeviceId.trim().length === 0) {
-      return res.status(400).json({
-        message: "DeviceId is required"
       })
     }
 
@@ -426,13 +406,6 @@ router.post('/login', async (req, res) => {
     if (!isPasswordValid) {
       return res.status(401).json({
         message: "Invalid password"
-      })
-    }
-
-    // Verify DeviceId matches the user's registered device
-    if (user.DeviceId !== DeviceId.trim()) {
-      return res.status(403).json({
-        message: "Device ID mismatch. You can only login from your registered device."
       })
     }
 

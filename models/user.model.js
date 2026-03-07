@@ -18,8 +18,8 @@ let schema = new mongoose.Schema({
     },
     DeviceId: {
         type: String,
-        required: true,
-        unique: true
+        required: false,
+        unique: false
     },
     SignupTime: {
         type: Date,
