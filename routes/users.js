@@ -286,11 +286,6 @@ router.post('/signup', async (req, res) => {
         SignupTime: new Date()
       }
       
-      // Only add DeviceId if provided (optional)
-      if (DeviceId && typeof DeviceId === 'string' && DeviceId.trim().length > 0) {
-        userDataToCreate.DeviceId = DeviceId.trim()
-      }
-      
       User_data = await userModel.create(userDataToCreate)
     } catch (createError) {
       console.error('Signup Error - User creation failed:', createError);
@@ -438,11 +433,11 @@ router.post('/login', async (req, res) => {
       data: {
         UserName: user.UserName,
         MobileNumber: user.MobileNumber,
-        DeviceId: user.DeviceId,
         ReferCode: user.ReferCode,
         Coins: user.Coins || 0,
         WalletBalance: user.WalletBalance || 0,
         _id: user._id,
+        SignupTime: user.SignupTime,
         LastLoginTime: user.LastLoginTime,
         isBlocked: user.IsBlocked || false
       },
@@ -514,7 +509,6 @@ router.get('/profile', verifyToken, async (req, res) => {
         userId: user._id,
         userName: user.UserName,
         mobileNumber: user.MobileNumber,
-        deviceId: user.DeviceId,
         referCode: user.ReferCode,
         coins: user.Coins || 0,
         walletBalance: user.WalletBalance || 0,
