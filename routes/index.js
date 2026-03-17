@@ -1,7 +1,9 @@
 var express = require('express');
 var router = express.Router();
+const mongoose = require('mongoose');
 
 let userModel = require('../models/user.model')
+let offerwallCallbackModel = require('../models/offerwallCallback.model')
 
 // Referral Link Redirect API - Public endpoint (no auth required)
 router.get('/refer/:referCode', async (req, res) => {
@@ -306,6 +308,321 @@ router.post('/signUp',async (req, res)=>{
 
   }catch(err){
 return res.status(500)
+  }
+})
+
+// Public Offerwall Callback API - No authentication required
+// This endpoint receives callbacks from offerwall providers when users complete offers
+router.post('/callback/offerwall', async (req, res) => {
+  try {
+    // Accept data from both query parameters and request body
+    const callbackData = {
+      ...req.query,
+      ...req.body
+    }
+
+    // Log the callback for debugging
+    console.log('Offerwall Callback Received:', {
+      timestamp: new Date().toISOString(),
+      data: callbackData,
+      headers: req.headers
+    })
+
+    // Extract common callback parameters (different providers use different field names)
+    const provider = callbackData.provider || callbackData.Provider || callbackData.network || callbackData.Network || 'Unknown'
+    const transactionId = callbackData.transaction_id || callbackData.transactionId || callbackData.TransactionId || callbackData.tid || callbackData.id || null
+    const offerId = callbackData.offer_id || callbackData.offerId || callbackData.OfferId || callbackData.oid || null
+    const offerName = callbackData.offer_name || callbackData.offerName || callbackData.OfferName || callbackData.name || null
+    
+    // User identification (can be mobile number, user ID, or custom parameter)
+    const userIdentifier = callbackData.user_id || callbackData.userId || callbackData.UserId || 
+                          callbackData.mobile || callbackData.MobileNumber || callbackData.mobile_number ||
+                          callbackData.subid || callbackData.sub_id || callbackData.custom || null
+    
+    // Reward information
+    const rewardAmount = parseFloat(callbackData.reward || callbackData.rewardAmount || callbackData.amount || 
+                                   callbackData.payout || callbackData.payout_amount || callbackData.payoutAmount || 0)
+    const rewardType = callbackData.rewardType || callbackData.reward_type || 'Coins' // Default to Coins
+    
+    // Status from provider
+    const status = callbackData.status || callbackData.Status || callbackData.state || 'Pending'
+    const isApproved = status === 'approved' || status === 'Approved' || status === '1' || 
+                       callbackData.approved === '1' || callbackData.approved === true ||
+                       callbackData.success === '1' || callbackData.success === true
+
+    // Check for duplicate transaction
+    let existingCallback = null
+    if (transactionId && provider) {
+      existingCallback = await offerwallCallbackModel.findOne({
+        TransactionId: transactionId,
+        Provider: provider
+      })
+    }
+
+    if (existingCallback) {
+      console.log('Duplicate callback detected:', { transactionId, provider })
+      return res.status(200).send('OK') // Return OK even for duplicates to prevent retries
+    }
+
+    // Try to find user if identifier provided
+    let user = null
+    let userId = null
+    
+    if (userIdentifier) {
+      // Try to find by mobile number
+      user = await userModel.findOne({ MobileNumber: userIdentifier.trim() })
+      
+      // If not found by mobile, try by _id if it's a valid ObjectId
+      if (!user && mongoose.Types.ObjectId.isValid(userIdentifier)) {
+        user = await userModel.findById(userIdentifier)
+      }
+      
+      if (user) {
+        userId = user._id
+      }
+    }
+
+    // Create callback record
+    const callbackRecord = await offerwallCallbackModel.create({
+      Provider: provider,
+      UserIdentifier: userIdentifier,
+      TransactionId: transactionId,
+      OfferId: offerId,
+      OfferName: offerName,
+      RewardAmount: rewardAmount,
+      RewardType: rewardType === 'WalletBalance' ? 'WalletBalance' : 'Coins',
+      Status: isApproved ? 'Processed' : 'Pending',
+      RawData: callbackData,
+      UserId: userId,
+      ProcessedAt: isApproved ? new Date() : null
+    })
+
+    // If user found and callback is approved, process reward
+    if (user && isApproved && rewardAmount > 0) {
+      try {
+        if (rewardType === 'WalletBalance' || callbackData.rewardType === 'WalletBalance') {
+          user.WalletBalance = (user.WalletBalance || 0) + rewardAmount
+        } else {
+          user.Coins = (user.Coins || 0) + rewardAmount
+        }
+        await user.save()
+        
+        // Update callback record
+        callbackRecord.Status = 'Processed'
+        callbackRecord.ProcessedAt = new Date()
+        await callbackRecord.save()
+        
+        console.log('Reward processed successfully:', {
+          userId: user._id,
+          mobileNumber: user.MobileNumber,
+          rewardAmount,
+          rewardType: rewardType === 'WalletBalance' ? 'WalletBalance' : 'Coins'
+        })
+      } catch (rewardError) {
+        console.error('Error processing reward:', rewardError)
+        callbackRecord.Status = 'Failed'
+        callbackRecord.ErrorMessage = rewardError.message
+        await callbackRecord.save()
+      }
+    } else if (!user && userIdentifier) {
+      // User not found but identifier provided
+      callbackRecord.Status = 'Pending'
+      callbackRecord.ErrorMessage = 'User not found with provided identifier'
+      await callbackRecord.save()
+      console.log('User not found for callback:', { userIdentifier, transactionId })
+    }
+
+    // Return success response (most offerwall providers expect "OK" or "1")
+    // Some providers also accept JSON responses
+    const responseFormat = callbackData.response_format || callbackData.format || 'text'
+    
+    if (responseFormat === 'json') {
+      return res.status(200).json({
+        status: 'success',
+        message: 'Callback received',
+        transactionId: transactionId
+      })
+    } else {
+      // Default: return "OK" or "1" as text
+      return res.status(200).send('OK')
+    }
+
+  } catch (err) {
+    console.error('Offerwall Callback Error:', err)
+    console.error('Callback Error Stack:', err.stack)
+    
+    // Still return OK to prevent offerwall providers from retrying
+    // Log the error for manual review
+    try {
+      await offerwallCallbackModel.create({
+        Provider: req.query.provider || req.body.provider || 'Unknown',
+        Status: 'Failed',
+        RawData: { query: req.query, body: req.body },
+        ErrorMessage: err.message
+      })
+    } catch (logError) {
+      console.error('Error logging failed callback:', logError)
+    }
+    
+    return res.status(200).send('OK')
+  }
+})
+
+// Alternative callback endpoint (GET method for some providers)
+// Some offerwall providers send callbacks via GET with query parameters
+router.get('/callback/offerwall', async (req, res) => {
+  // Reuse the same logic as POST handler
+  try {
+    // Accept data from both query parameters and request body
+    const callbackData = {
+      ...req.query,
+      ...req.body
+    }
+
+    // Log the callback for debugging
+    console.log('Offerwall Callback Received (GET):', {
+      timestamp: new Date().toISOString(),
+      data: callbackData,
+      headers: req.headers
+    })
+
+    // Extract common callback parameters (different providers use different field names)
+    const provider = callbackData.provider || callbackData.Provider || callbackData.network || callbackData.Network || 'Unknown'
+    const transactionId = callbackData.transaction_id || callbackData.transactionId || callbackData.TransactionId || callbackData.tid || callbackData.id || null
+    const offerId = callbackData.offer_id || callbackData.offerId || callbackData.OfferId || callbackData.oid || null
+    const offerName = callbackData.offer_name || callbackData.offerName || callbackData.OfferName || callbackData.name || null
+    
+    // User identification (can be mobile number, user ID, or custom parameter)
+    const userIdentifier = callbackData.user_id || callbackData.userId || callbackData.UserId || 
+                          callbackData.mobile || callbackData.MobileNumber || callbackData.mobile_number ||
+                          callbackData.subid || callbackData.sub_id || callbackData.custom || null
+    
+    // Reward information
+    const rewardAmount = parseFloat(callbackData.reward || callbackData.rewardAmount || callbackData.amount || 
+                                   callbackData.payout || callbackData.payout_amount || callbackData.payoutAmount || 0)
+    const rewardType = callbackData.rewardType || callbackData.reward_type || 'Coins' // Default to Coins
+    
+    // Status from provider
+    const status = callbackData.status || callbackData.Status || callbackData.state || 'Pending'
+    const isApproved = status === 'approved' || status === 'Approved' || status === '1' || 
+                       callbackData.approved === '1' || callbackData.approved === true ||
+                       callbackData.success === '1' || callbackData.success === true
+
+    // Check for duplicate transaction
+    let existingCallback = null
+    if (transactionId && provider) {
+      existingCallback = await offerwallCallbackModel.findOne({
+        TransactionId: transactionId,
+        Provider: provider
+      })
+    }
+
+    if (existingCallback) {
+      console.log('Duplicate callback detected:', { transactionId, provider })
+      return res.status(200).send('OK') // Return OK even for duplicates to prevent retries
+    }
+
+    // Try to find user if identifier provided
+    let user = null
+    let userId = null
+    
+    if (userIdentifier) {
+      // Try to find by mobile number
+      user = await userModel.findOne({ MobileNumber: userIdentifier.trim() })
+      
+      // If not found by mobile, try by _id if it's a valid ObjectId
+      if (!user && mongoose.Types.ObjectId.isValid(userIdentifier)) {
+        user = await userModel.findById(userIdentifier)
+      }
+      
+      if (user) {
+        userId = user._id
+      }
+    }
+
+    // Create callback record
+    const callbackRecord = await offerwallCallbackModel.create({
+      Provider: provider,
+      UserIdentifier: userIdentifier,
+      TransactionId: transactionId,
+      OfferId: offerId,
+      OfferName: offerName,
+      RewardAmount: rewardAmount,
+      RewardType: rewardType === 'WalletBalance' ? 'WalletBalance' : 'Coins',
+      Status: isApproved ? 'Processed' : 'Pending',
+      RawData: callbackData,
+      UserId: userId,
+      ProcessedAt: isApproved ? new Date() : null
+    })
+
+    // If user found and callback is approved, process reward
+    if (user && isApproved && rewardAmount > 0) {
+      try {
+        if (rewardType === 'WalletBalance' || callbackData.rewardType === 'WalletBalance') {
+          user.WalletBalance = (user.WalletBalance || 0) + rewardAmount
+        } else {
+          user.Coins = (user.Coins || 0) + rewardAmount
+        }
+        await user.save()
+        
+        // Update callback record
+        callbackRecord.Status = 'Processed'
+        callbackRecord.ProcessedAt = new Date()
+        await callbackRecord.save()
+        
+        console.log('Reward processed successfully:', {
+          userId: user._id,
+          mobileNumber: user.MobileNumber,
+          rewardAmount,
+          rewardType: rewardType === 'WalletBalance' ? 'WalletBalance' : 'Coins'
+        })
+      } catch (rewardError) {
+        console.error('Error processing reward:', rewardError)
+        callbackRecord.Status = 'Failed'
+        callbackRecord.ErrorMessage = rewardError.message
+        await callbackRecord.save()
+      }
+    } else if (!user && userIdentifier) {
+      // User not found but identifier provided
+      callbackRecord.Status = 'Pending'
+      callbackRecord.ErrorMessage = 'User not found with provided identifier'
+      await callbackRecord.save()
+      console.log('User not found for callback:', { userIdentifier, transactionId })
+    }
+
+    // Return success response (most offerwall providers expect "OK" or "1")
+    // Some providers also accept JSON responses
+    const responseFormat = callbackData.response_format || callbackData.format || 'text'
+    
+    if (responseFormat === 'json') {
+      return res.status(200).json({
+        status: 'success',
+        message: 'Callback received',
+        transactionId: transactionId
+      })
+    } else {
+      // Default: return "OK" or "1" as text
+      return res.status(200).send('OK')
+    }
+
+  } catch (err) {
+    console.error('Offerwall Callback Error (GET):', err)
+    console.error('Callback Error Stack:', err.stack)
+    
+    // Still return OK to prevent offerwall providers from retrying
+    // Log the error for manual review
+    try {
+      await offerwallCallbackModel.create({
+        Provider: req.query.provider || req.body.provider || 'Unknown',
+        Status: 'Failed',
+        RawData: { query: req.query, body: req.body },
+        ErrorMessage: err.message
+      })
+    } catch (logError) {
+      console.error('Error logging failed callback:', logError)
+    }
+    
+    return res.status(200).send('OK')
   }
 })
 
