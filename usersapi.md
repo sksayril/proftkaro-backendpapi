@@ -4466,3 +4466,161 @@ fetch('http://localhost:3100/users/support/link', {
 - All support fields are optional and may be null
 - Support link must be a valid URL (validated by admin)
 - Support email must be a valid email format (validated by admin)
+
+---
+
+## Newly Added / Updated User APIs
+
+### GET /users/task-controls/public
+Public API for task controls (no auth required).  
+Useful for showing ads-control, limit-control, coin-control in app startup screens.
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Task controls retrieved successfully",
+  "data": [
+    {
+      "TaskType": "Captcha",
+      "IsActive": true,
+      "AdsEnabled": true,
+      "DailyLimit": 20,
+      "CoinsPerTask": 2
+    },
+    {
+      "TaskType": "AppInstall",
+      "IsActive": true,
+      "AdsEnabled": false,
+      "DailyLimit": 5,
+      "CoinsPerTask": 50
+    }
+  ]
+}
+```
+
+---
+
+### GET /users/task-controls
+Authenticated version of task controls API.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+---
+
+### POST /users/captcha/solve (Updated)
+Now respects centralized task controls:
+- `IsActive` check
+- `DailyLimit` override
+- `CoinsPerTask` override
+- response includes `adsEnabled`
+
+---
+
+### GET /users/dailyspin/status (Updated)
+Now includes:
+- admin-controlled daily limit override
+- `isActive`
+- `adsEnabled`
+
+---
+
+### POST /users/dailyspin/use (Updated)
+Now respects:
+- `IsActive` from task control
+- admin `DailyLimit` override
+
+---
+
+### GET /users/scratchcard/dailylimit (Updated)
+Now respects:
+- `IsActive`
+- admin `DailyLimit` override
+- admin `CoinsPerTask` override
+- response includes `adsEnabled`
+
+---
+
+### POST /users/scratchcard/dailylimit/claim (Updated)
+Now respects:
+- `IsActive`
+- admin `DailyLimit` override
+- admin `CoinsPerTask` override
+
+---
+
+### GET /users/apps (Updated)
+Now supports AppInstall task control:
+- if `IsActive=false`, returns empty app list
+- `rewardCoins` can be overridden via `CoinsPerTask`
+- response includes `taskControl`
+
+---
+
+### POST /users/apps/:appId/submit (Updated)
+Now supports AppInstall task control:
+- blocks submission if `IsActive=false`
+- enforces admin `DailyLimit` for app submissions
+
+---
+
+## Ads Management User APIs
+
+### GET /users/ads/settings/public
+Public endpoint to get full ads configuration (no token required).
+
+Use this for app startup/home screen to know:
+- global ad enable/disable
+- task-wise banner/rewarded/interstitial toggle
+- per task frequency (after how many actions to show ad)
+
+---
+
+### GET /users/ads/settings
+Authenticated version of ads settings.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+---
+
+### GET /users/ads/decision
+Evaluate if ad should be shown now for a task based on action count.
+
+**Query Params:**
+- `taskType` (required): `Quiz | Captcha | DailySpin | ScratchCard | ScratchCardDailyLimit | AppInstall`
+- `actionCount` (optional, default `0`)
+
+**Example:**
+```
+GET /users/ads/decision?taskType=ScratchCard&actionCount=4
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Ads decision evaluated successfully",
+  "data": {
+    "taskType": "ScratchCard",
+    "actionCount": 4,
+    "globalAdsEnabled": true,
+    "bannerAdsEnabled": true,
+    "rewardedAdsEnabled": true,
+    "interstitialAdsEnabled": true,
+    "taskActive": true,
+    "decision": {
+      "showBanner": true,
+      "showRewarded": true,
+      "showInterstitial": true,
+      "shouldShowInterstitialNow": true,
+      "shouldShowRewardedNow": false,
+      "interstitialAfterCount": 2,
+      "rewardedAfterCount": 3
+    }
+  }
+}
+```

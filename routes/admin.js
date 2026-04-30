@@ -13,6 +13,7 @@ let userModel = require('../models/user.model')
 let appModel = require('../models/app.model')
 let appInstallationSubmissionModel = require('../models/appInstallationSubmission.model')
 let coinConversionSettingsModel = require('../models/coinConversionSettings.model')
+let coinConversionHistoryModel = require('../models/coinConversionHistory.model')
 let scratchCardSettingsModel = require('../models/scratchCardSettings.model')
 let scratchCardClaimModel = require('../models/scratchCardClaim.model')
 let scratchCardDailyLimitSettingsModel = require('../models/scratchCardDailyLimitSettings.model')
@@ -24,6 +25,27 @@ let captchaSolveModel = require('../models/captchaSolve.model')
 let dailyBonusClaimModel = require('../models/dailyBonusClaim.model')
 let sponsorPromotionSubmissionModel = require('../models/sponsorPromotionSubmission.model')
 let supportLinkSettingsModel = require('../models/supportLinkSettings.model')
+let taskControlSettingsModel = require('../models/taskControlSettings.model')
+let adsManagementSettingsModel = require('../models/adsManagementSettings.model')
+
+const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall']
+
+function getStartOfToday() {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  return date
+}
+
+function getStartOfYesterday() {
+  const date = getStartOfToday()
+  date.setDate(date.getDate() - 1)
+  return date
+}
+
+function getStartOfMonth(offsetMonths = 0) {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth() + offsetMonths, 1)
+}
 
 // Admin Signup API
 router.post('/signup', async (req, res) => {
@@ -610,6 +632,69 @@ router.post('/withdrawal/request/:requestId/status', verifyToken, async (req, re
 
   } catch (err) {
     console.error('Update Withdrawal Request Status - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Bulk Approve/Reject Withdrawal Requests API
+router.post('/withdrawal/requests/bulk-status', verifyToken, async (req, res) => {
+  try {
+    const { requestIds, status, adminNotes } = req.body
+
+    if (!Array.isArray(requestIds) || requestIds.length === 0) {
+      return res.status(400).json({
+        message: "requestIds must be a non-empty array"
+      })
+    }
+
+    if (!status || !['Approved', 'Rejected'].includes(status)) {
+      return res.status(400).json({
+        message: "Status is required and must be either 'Approved' or 'Rejected'"
+      })
+    }
+
+    const requests = await withdrawalRequestModel.find({
+      _id: { $in: requestIds },
+      Status: 'Pending'
+    })
+
+    const results = []
+
+    for (const reqData of requests) {
+      reqData.Status = status
+      if (adminNotes !== undefined) {
+        reqData.AdminNotes = adminNotes
+      }
+      await reqData.save()
+
+      // If rejected, amount was already deducted at request creation, so return it.
+      if (status === 'Rejected') {
+        await userModel.findByIdAndUpdate(reqData.UserId, {
+          $inc: { WalletBalance: reqData.Amount }
+        })
+      }
+
+      results.push({
+        requestId: reqData._id,
+        amount: reqData.Amount,
+        status: reqData.Status
+      })
+    }
+
+    return res.json({
+      message: `Bulk withdrawal ${status.toLowerCase()} completed`,
+      data: {
+        requested: requestIds.length,
+        processed: results.length,
+        skipped: requestIds.length - results.length,
+        results: results
+      }
+    })
+  } catch (err) {
+    console.error('Bulk Update Withdrawal Requests - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
@@ -1802,7 +1887,11 @@ router.post('/apps/submissions/:submissionId/status', verifyToken, async (req, r
 
     // If approved, add reward coins to user's wallet
     if (status === 'Approved') {
-      user.Coins = (user.Coins || 0) + submission.AppId.RewardCoins
+      const appInstallControl = await taskControlSettingsModel.getControl('AppInstall')
+      const rewardCoins = appInstallControl.CoinsPerTask !== null && appInstallControl.CoinsPerTask !== undefined
+        ? appInstallControl.CoinsPerTask
+        : (submission.AppId.RewardCoins || 0)
+      user.Coins = (user.Coins || 0) + rewardCoins
       await user.save()
     }
 
@@ -1821,6 +1910,129 @@ router.post('/apps/submissions/:submissionId/status', verifyToken, async (req, r
 
   } catch (err) {
     console.error('Update Submission Status - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Bulk Approve/Reject App Installation Submissions API
+router.post('/apps/submissions/bulk-status', verifyToken, async (req, res) => {
+  try {
+    const { submissionIds, status, adminNotes } = req.body
+
+    if (!Array.isArray(submissionIds) || submissionIds.length === 0) {
+      return res.status(400).json({
+        message: "submissionIds must be a non-empty array"
+      })
+    }
+
+    if (!status || !['Approved', 'Rejected'].includes(status)) {
+      return res.status(400).json({
+        message: "Status is required and must be either 'Approved' or 'Rejected'"
+      })
+    }
+
+    const submissions = await appInstallationSubmissionModel.find({
+      _id: { $in: submissionIds },
+      Status: 'Pending'
+    }).populate('AppId', 'RewardCoins AppName')
+
+    const results = []
+    let processedCount = 0
+
+    for (const submission of submissions) {
+      submission.Status = status
+      if (adminNotes !== undefined) {
+        submission.AdminNotes = adminNotes
+      }
+      await submission.save()
+
+      let finalCoins = null
+      if (status === 'Approved') {
+        const appInstallControl = await taskControlSettingsModel.getControl('AppInstall')
+        const rewardCoins = appInstallControl.CoinsPerTask !== null && appInstallControl.CoinsPerTask !== undefined
+          ? appInstallControl.CoinsPerTask
+          : (submission.AppId?.RewardCoins || 0)
+
+        const user = await userModel.findById(submission.UserId)
+        if (user) {
+          user.Coins = (user.Coins || 0) + rewardCoins
+          await user.save()
+          finalCoins = user.Coins || 0
+        }
+      }
+
+      processedCount += 1
+      results.push({
+        submissionId: submission._id,
+        status: submission.Status,
+        appName: submission.AppId?.AppName || null,
+        userCoins: finalCoins
+      })
+    }
+
+    return res.json({
+      message: `Bulk ${status.toLowerCase()} completed`,
+      data: {
+        requested: submissionIds.length,
+        processed: processedCount,
+        skipped: submissionIds.length - processedCount,
+        results: results
+      }
+    })
+  } catch (err) {
+    console.error('Bulk Update App Submission Status - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Delete App Installation Submission API
+router.delete('/apps/submissions/:submissionId', verifyToken, async (req, res) => {
+  try {
+    const { submissionId } = req.params
+    const { allowApprovedDelete = false, revertReward = false } = req.query
+
+    const submission = await appInstallationSubmissionModel.findById(submissionId)
+      .populate('AppId', 'RewardCoins')
+
+    if (!submission) {
+      return res.status(404).json({
+        message: "Submission not found"
+      })
+    }
+
+    if (submission.Status === 'Approved' && String(allowApprovedDelete) !== 'true') {
+      return res.status(400).json({
+        message: "Approved submission cannot be deleted without allowApprovedDelete=true"
+      })
+    }
+
+    if (submission.Status === 'Approved' && String(revertReward) === 'true') {
+      const appInstallControl = await taskControlSettingsModel.getControl('AppInstall')
+      const rewardCoins = appInstallControl.CoinsPerTask !== null && appInstallControl.CoinsPerTask !== undefined
+        ? appInstallControl.CoinsPerTask
+        : (submission.AppId?.RewardCoins || 0)
+      await userModel.findByIdAndUpdate(submission.UserId, {
+        $inc: { Coins: -Math.abs(rewardCoins) }
+      })
+    }
+
+    await appInstallationSubmissionModel.findByIdAndDelete(submissionId)
+
+    return res.json({
+      message: "Submission deleted successfully",
+      data: {
+        submissionId: submissionId,
+        status: submission.Status
+      }
+    })
+  } catch (err) {
+    console.error('Delete App Submission - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
@@ -2299,6 +2511,192 @@ router.get('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
   }
 })
 
+// ==================== TASK CONTROL APIs ====================
+router.get('/task-controls', verifyAdminToken, async (req, res) => {
+  try {
+    const controls = await Promise.all(
+      CONTROLLED_TASK_TYPES.map(async (taskType) => taskControlSettingsModel.getControl(taskType))
+    )
+    return res.json({
+      message: "Task controls retrieved successfully",
+      data: controls
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.post('/task-controls/:taskType', verifyAdminToken, async (req, res) => {
+  try {
+    const { taskType } = req.params
+    const { IsActive, AdsEnabled, DailyLimit, CoinsPerTask } = req.body
+
+    if (!CONTROLLED_TASK_TYPES.includes(taskType)) {
+      return res.status(400).json({
+        message: `taskType must be one of ${CONTROLLED_TASK_TYPES.join(', ')}`
+      })
+    }
+
+    const control = await taskControlSettingsModel.getControl(taskType)
+    if (IsActive !== undefined) control.IsActive = Boolean(IsActive)
+    if (AdsEnabled !== undefined) control.AdsEnabled = Boolean(AdsEnabled)
+    if (DailyLimit !== undefined) {
+      control.DailyLimit = DailyLimit === null ? null : Number(DailyLimit)
+    }
+    if (CoinsPerTask !== undefined) {
+      control.CoinsPerTask = CoinsPerTask === null ? null : Number(CoinsPerTask)
+    }
+
+    await control.save()
+    return res.json({
+      message: "Task control updated successfully",
+      data: control
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== ADS MANAGEMENT APIs ====================
+router.get('/ads/settings', verifyAdminToken, async (req, res) => {
+  try {
+    const settings = await adsManagementSettingsModel.getSettings()
+    return res.json({
+      message: "Ads settings retrieved successfully",
+      data: settings
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.post('/ads/settings', verifyAdminToken, async (req, res) => {
+  try {
+    const {
+      GlobalAdsEnabled,
+      BannerAdsEnabled,
+      RewardedAdsEnabled,
+      InterstitialAdsEnabled,
+      TaskRules
+    } = req.body
+
+    const settings = await adsManagementSettingsModel.getSettings()
+
+    if (GlobalAdsEnabled !== undefined) settings.GlobalAdsEnabled = Boolean(GlobalAdsEnabled)
+    if (BannerAdsEnabled !== undefined) settings.BannerAdsEnabled = Boolean(BannerAdsEnabled)
+    if (RewardedAdsEnabled !== undefined) settings.RewardedAdsEnabled = Boolean(RewardedAdsEnabled)
+    if (InterstitialAdsEnabled !== undefined) settings.InterstitialAdsEnabled = Boolean(InterstitialAdsEnabled)
+
+    if (Array.isArray(TaskRules)) {
+      const validTaskTypes = adsManagementSettingsModel.TASK_TYPES
+      for (const incomingRule of TaskRules) {
+        if (!incomingRule || !incomingRule.TaskType || !validTaskTypes.includes(incomingRule.TaskType)) {
+          continue
+        }
+
+        let existingRule = settings.TaskRules.find(rule => rule.TaskType === incomingRule.TaskType)
+        if (!existingRule) {
+          settings.TaskRules.push({
+            TaskType: incomingRule.TaskType,
+            IsActive: true,
+            BannerEnabled: true,
+            RewardedEnabled: true,
+            InterstitialEnabled: true,
+            InterstitialAfterCount: 1,
+            RewardedAfterCount: 1
+          })
+          existingRule = settings.TaskRules.find(rule => rule.TaskType === incomingRule.TaskType)
+        }
+
+        if (incomingRule.IsActive !== undefined) existingRule.IsActive = Boolean(incomingRule.IsActive)
+        if (incomingRule.BannerEnabled !== undefined) existingRule.BannerEnabled = Boolean(incomingRule.BannerEnabled)
+        if (incomingRule.RewardedEnabled !== undefined) existingRule.RewardedEnabled = Boolean(incomingRule.RewardedEnabled)
+        if (incomingRule.InterstitialEnabled !== undefined) existingRule.InterstitialEnabled = Boolean(incomingRule.InterstitialEnabled)
+        if (incomingRule.InterstitialAfterCount !== undefined) {
+          existingRule.InterstitialAfterCount = Math.max(1, Number(incomingRule.InterstitialAfterCount) || 1)
+        }
+        if (incomingRule.RewardedAfterCount !== undefined) {
+          existingRule.RewardedAfterCount = Math.max(1, Number(incomingRule.RewardedAfterCount) || 1)
+        }
+      }
+    }
+
+    await settings.save()
+    return res.json({
+      message: "Ads settings updated successfully",
+      data: settings
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.post('/ads/settings/task/:taskType', verifyAdminToken, async (req, res) => {
+  try {
+    const { taskType } = req.params
+    const validTaskTypes = adsManagementSettingsModel.TASK_TYPES
+    if (!validTaskTypes.includes(taskType)) {
+      return res.status(400).json({
+        message: `taskType must be one of ${validTaskTypes.join(', ')}`
+      })
+    }
+
+    const {
+      IsActive,
+      BannerEnabled,
+      RewardedEnabled,
+      InterstitialEnabled,
+      InterstitialAfterCount,
+      RewardedAfterCount
+    } = req.body
+
+    const settings = await adsManagementSettingsModel.getSettings()
+    let taskRule = settings.TaskRules.find(rule => rule.TaskType === taskType)
+    if (!taskRule) {
+      settings.TaskRules.push({
+        TaskType: taskType,
+        IsActive: true,
+        BannerEnabled: true,
+        RewardedEnabled: true,
+        InterstitialEnabled: true,
+        InterstitialAfterCount: 1,
+        RewardedAfterCount: 1
+      })
+      taskRule = settings.TaskRules.find(rule => rule.TaskType === taskType)
+    }
+
+    if (IsActive !== undefined) taskRule.IsActive = Boolean(IsActive)
+    if (BannerEnabled !== undefined) taskRule.BannerEnabled = Boolean(BannerEnabled)
+    if (RewardedEnabled !== undefined) taskRule.RewardedEnabled = Boolean(RewardedEnabled)
+    if (InterstitialEnabled !== undefined) taskRule.InterstitialEnabled = Boolean(InterstitialEnabled)
+    if (InterstitialAfterCount !== undefined) taskRule.InterstitialAfterCount = Math.max(1, Number(InterstitialAfterCount) || 1)
+    if (RewardedAfterCount !== undefined) taskRule.RewardedAfterCount = Math.max(1, Number(RewardedAfterCount) || 1)
+
+    await settings.save()
+    return res.json({
+      message: "Task ad settings updated successfully",
+      data: taskRule
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
 // ==================== ADMIN DASHBOARD API ====================
 
 // Get Admin Dashboard Statistics API
@@ -2440,9 +2838,60 @@ router.get('/dashboard', verifyAdminToken, async (req, res) => {
       createdAt: { $gte: todayStart }
     })
 
+    const yesterdayStart = getStartOfYesterday()
+    const sevenDayStart = new Date(todayStart)
+    sevenDayStart.setDate(sevenDayStart.getDate() - 6)
+    const thisMonthStart = getStartOfMonth(0)
+    const lastMonthStart = getStartOfMonth(-1)
+
+    const yesterdayRegistrations = await userModel.countDocuments({
+      createdAt: { $gte: yesterdayStart, $lt: todayStart }
+    })
+    const sevenDayUsers = await userModel.countDocuments({
+      createdAt: { $gte: sevenDayStart }
+    })
+    const thisMonthUsers = await userModel.countDocuments({
+      createdAt: { $gte: thisMonthStart }
+    })
+    const lastMonthUsers = await userModel.countDocuments({
+      createdAt: { $gte: lastMonthStart, $lt: thisMonthStart }
+    })
+
+    const withdrawalsTodayAgg = await withdrawalRequestModel.aggregate([
+      { $match: { createdAt: { $gte: todayStart } } },
+      { $group: { _id: null, total: { $sum: '$Amount' } } }
+    ])
+    const withdrawalsYesterdayAgg = await withdrawalRequestModel.aggregate([
+      { $match: { createdAt: { $gte: yesterdayStart, $lt: todayStart } } },
+      { $group: { _id: null, total: { $sum: '$Amount' } } }
+    ])
+    const withdrawalsThisMonthAgg = await withdrawalRequestModel.aggregate([
+      { $match: { createdAt: { $gte: thisMonthStart } } },
+      { $group: { _id: null, total: { $sum: '$Amount' } } }
+    ])
+
+    const todayWithdrawal = withdrawalsTodayAgg[0]?.total || 0
+    const yesterdayWithdrawal = withdrawalsYesterdayAgg[0]?.total || 0
+    const thisMonthWithdrawal = withdrawalsThisMonthAgg[0]?.total || 0
+
     return res.json({
       message: "Dashboard statistics retrieved successfully",
       data: {
+        requestedSummary: {
+          users: {
+            today: todayRegistrations,
+            yesterday: yesterdayRegistrations,
+            sevenDays: sevenDayUsers,
+            thisMonth: thisMonthUsers,
+            lastMonth: lastMonthUsers,
+            total: totalUsers
+          },
+          withdrawals: {
+            today: todayWithdrawal,
+            yesterday: yesterdayWithdrawal,
+            thisMonth: thisMonthWithdrawal
+          }
+        },
         users: {
           totalUsers: totalUsers,
           todayRegistrations: todayRegistrations,
@@ -3217,6 +3666,136 @@ router.put('/support/link', verifyAdminToken, async (req, res) => {
 
   } catch (err) {
     console.error('Update Support Link - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Get complete user earning activity (admin view)
+router.get('/users/:userId/activity', verifyAdminToken, async (req, res) => {
+  try {
+    const { userId } = req.params
+    const { page = 1, limit = 50, type } = req.query
+
+    const user = await userModel.findById(userId).select('UserName MobileNumber ReferCode Coins WalletBalance')
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found"
+      })
+    }
+
+    const pageNum = parseInt(page) || 1
+    const limitNum = parseInt(limit) || 50
+    const typeFilter = type ? String(type).toUpperCase() : null
+
+    const [appSubs, captchaSolves, scratchClaims, scratchDailyClaims, conversions, withdrawals, dailyBonusClaims, sponsorSubmissions] = await Promise.all([
+      appInstallationSubmissionModel.find({ UserId: userId }).populate('AppId', 'AppName RewardCoins').sort({ updatedAt: -1 }).limit(200),
+      captchaSolveModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200),
+      scratchCardClaimModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200),
+      scratchCardDailyLimitClaimModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200),
+      coinConversionHistoryModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200),
+      withdrawalRequestModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200),
+      dailyBonusClaimModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200),
+      sponsorPromotionSubmissionModel.find({ UserId: userId }).sort({ createdAt: -1 }).limit(200)
+    ])
+
+    let events = [
+      ...appSubs.map(s => ({
+        type: 'APP_INSTALL',
+        title: `App Install - ${s.AppId?.AppName || 'App'}`,
+        status: s.Status,
+        coinsChange: s.Status === 'Approved' ? (s.AppId?.RewardCoins || 0) : 0,
+        walletChange: 0,
+        createdAt: s.updatedAt || s.createdAt
+      })),
+      ...captchaSolves.map(c => ({
+        type: 'CAPTCHA',
+        title: 'Captcha',
+        status: 'Completed',
+        coinsChange: c.RewardType === 'Coins' ? c.RewardAmount : 0,
+        walletChange: c.RewardType === 'WalletBalance' ? c.RewardAmount : 0,
+        createdAt: c.createdAt
+      })),
+      ...scratchClaims.map(c => ({
+        type: 'SCRATCH_CARD',
+        title: `Scratch Card - ${c.Day}`,
+        status: 'Completed',
+        coinsChange: c.RewardType === 'Coins' ? c.RewardAmount : 0,
+        walletChange: c.RewardType === 'WalletBalance' ? c.RewardAmount : 0,
+        createdAt: c.createdAt
+      })),
+      ...scratchDailyClaims.map(c => ({
+        type: 'SCRATCH_CARD_DAILY_LIMIT',
+        title: 'Scratch Card Daily Limit',
+        status: 'Completed',
+        coinsChange: c.RewardCoins || 0,
+        walletChange: c.RewardAmount || 0,
+        createdAt: c.createdAt
+      })),
+      ...conversions.map(c => ({
+        type: 'COIN_CONVERSION',
+        title: 'Coin Conversion',
+        status: 'Completed',
+        coinsChange: -(c.CoinsConverted || 0),
+        walletChange: c.RupeesAdded || 0,
+        createdAt: c.createdAt
+      })),
+      ...withdrawals.map(w => ({
+        type: 'WITHDRAWAL',
+        title: `Withdrawal - ${w.PaymentMethod}`,
+        status: w.Status,
+        coinsChange: 0,
+        walletChange: w.Status === 'Rejected' ? 0 : -(w.Amount || 0),
+        createdAt: w.createdAt
+      })),
+      ...dailyBonusClaims.map(d => ({
+        type: 'DAILY_BONUS',
+        title: 'Daily Bonus',
+        status: 'Completed',
+        coinsChange: d.RewardType === 'Coins' ? (d.Amount || 0) : 0,
+        walletChange: d.RewardType === 'WalletBalance' ? (d.Amount || 0) : 0,
+        createdAt: d.createdAt
+      })),
+      ...sponsorSubmissions.map(s => ({
+        type: 'SPONSOR_PROMOTION',
+        title: 'Sponsor Promotion',
+        status: s.Status,
+        coinsChange: 0,
+        walletChange: 0,
+        createdAt: s.createdAt
+      }))
+    ]
+
+    if (typeFilter) {
+      events = events.filter(item => item.type === typeFilter)
+    }
+
+    events.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    const totalEvents = events.length
+    const pagedEvents = events.slice((pageNum - 1) * limitNum, pageNum * limitNum)
+
+    return res.json({
+      message: "User activity retrieved successfully",
+      data: {
+        user: user,
+        events: pagedEvents,
+        summary: {
+          totalEvents: totalEvents,
+          totalCoinsDelta: events.reduce((sum, e) => sum + (e.coinsChange || 0), 0),
+          totalWalletDelta: events.reduce((sum, e) => sum + (e.walletChange || 0), 0)
+        },
+        pagination: {
+          currentPage: pageNum,
+          totalPages: Math.ceil(totalEvents / limitNum) || 1,
+          totalEvents: totalEvents,
+          limit: limitNum
+        }
+      }
+    })
+  } catch (err) {
+    console.error('Get User Activity - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message

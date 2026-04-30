@@ -3555,3 +3555,254 @@ OR for rejection:
 - When approved, reward coins are automatically added to user's wallet
 - Users can only have one approved submission per app
 - Users can resubmit if their submission was rejected
+
+---
+
+## Newly Added Admin APIs
+
+### GET /admin/dashboard (Updated Summary Fields)
+Dashboard response now includes additional requested summary fields:
+
+- `data.requestedSummary.users.today`
+- `data.requestedSummary.users.yesterday`
+- `data.requestedSummary.users.sevenDays`
+- `data.requestedSummary.users.thisMonth`
+- `data.requestedSummary.users.lastMonth`
+- `data.requestedSummary.users.total`
+- `data.requestedSummary.withdrawals.today`
+- `data.requestedSummary.withdrawals.yesterday`
+- `data.requestedSummary.withdrawals.thisMonth`
+
+---
+
+### GET /admin/users/:userId/activity
+Get complete user earning/activity timeline (app installs, captcha, scratch card, daily limit, conversion, withdrawal, sponsor submissions).
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Query Parameters (Optional):**
+- `page` (default: 1)
+- `limit` (default: 50)
+- `type` (example: `APP_INSTALL`, `CAPTCHA`, `WITHDRAWAL`)
+
+**Response (Success - 200):**
+```json
+{
+  "message": "User activity retrieved successfully",
+  "data": {
+    "user": {
+      "_id": "507f1f77bcf86cd799439011",
+      "UserName": "demo",
+      "MobileNumber": "9999999999",
+      "ReferCode": "ABC12X",
+      "Coins": 1200,
+      "WalletBalance": 50
+    },
+    "events": [],
+    "summary": {
+      "totalEvents": 0,
+      "totalCoinsDelta": 0,
+      "totalWalletDelta": 0
+    },
+    "pagination": {
+      "currentPage": 1,
+      "totalPages": 1,
+      "totalEvents": 0,
+      "limit": 50
+    }
+  }
+}
+```
+
+---
+
+### GET /admin/task-controls
+Get centralized task controls for:
+- `Captcha`
+- `DailySpin`
+- `ScratchCardDailyLimit`
+- `AppInstall`
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+---
+
+### POST /admin/task-controls/:taskType
+Update task controls (ads, limit, coin, active state).
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Path Param:**
+- `taskType`: `Captcha` | `DailySpin` | `ScratchCardDailyLimit` | `AppInstall`
+
+**Request Body (any fields optional):**
+```json
+{
+  "IsActive": true,
+  "AdsEnabled": true,
+  "DailyLimit": 10,
+  "CoinsPerTask": 5
+}
+```
+
+---
+
+### POST /admin/apps/submissions/bulk-status
+Bulk approve/reject app-install submissions (select करके ek sath action).
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "submissionIds": [
+    "507f1f77bcf86cd799439021",
+    "507f1f77bcf86cd799439022"
+  ],
+  "status": "Approved",
+  "adminNotes": "Verified in bulk"
+}
+```
+
+---
+
+### POST /admin/withdrawal/requests/bulk-status
+Bulk approve/reject withdrawal requests.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "requestIds": [
+    "507f1f77bcf86cd799439031",
+    "507f1f77bcf86cd799439032"
+  ],
+  "status": "Rejected",
+  "adminNotes": "Invalid payout details"
+}
+```
+
+---
+
+### DELETE /admin/apps/submissions/:submissionId
+Delete app-install submission (including option to delete approved ones).
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Query Parameters (Optional):**
+- `allowApprovedDelete=true` (required if submission is Approved)
+- `revertReward=true` (if Approved submission reward should be reversed)
+
+**Example:**
+```
+DELETE /admin/apps/submissions/507f1f77bcf86cd799439021?allowApprovedDelete=true&revertReward=true
+```
+
+---
+
+### GET /admin/ads/settings
+Get full ads management configuration for all tasks.
+
+Managed task types:
+- `Quiz`
+- `Captcha`
+- `DailySpin`
+- `ScratchCard`
+- `ScratchCardDailyLimit`
+- `AppInstall`
+
+Config includes:
+- Global on/off
+- Banner ads on/off
+- Rewarded ads on/off
+- Interstitial ads on/off
+- Per-task ad toggles
+- Per-task frequency (e.g. show interstitial every N quiz/spin/scratch actions)
+
+---
+
+### POST /admin/ads/settings
+Update full ads settings in a single API.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body Example:**
+```json
+{
+  "GlobalAdsEnabled": true,
+  "BannerAdsEnabled": true,
+  "RewardedAdsEnabled": true,
+  "InterstitialAdsEnabled": true,
+  "TaskRules": [
+    {
+      "TaskType": "Quiz",
+      "IsActive": true,
+      "BannerEnabled": true,
+      "RewardedEnabled": true,
+      "InterstitialEnabled": true,
+      "InterstitialAfterCount": 3,
+      "RewardedAfterCount": 2
+    },
+    {
+      "TaskType": "ScratchCard",
+      "InterstitialAfterCount": 2
+    },
+    {
+      "TaskType": "DailySpin",
+      "InterstitialAfterCount": 2
+    }
+  ]
+}
+```
+
+---
+
+### POST /admin/ads/settings/task/:taskType
+Update ad settings for one specific task.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Path Param:**
+- `taskType`: `Quiz | Captcha | DailySpin | ScratchCard | ScratchCardDailyLimit | AppInstall`
+
+**Request Body Example:**
+```json
+{
+  "IsActive": true,
+  "BannerEnabled": true,
+  "RewardedEnabled": true,
+  "InterstitialEnabled": true,
+  "InterstitialAfterCount": 4,
+  "RewardedAfterCount": 2
+}
+```

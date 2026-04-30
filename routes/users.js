@@ -44,6 +44,32 @@ let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
 let signupBonusSettingsModel = require('../models/signupBonusSettings.model')
 let sponsorPromotionSubmissionModel = require('../models/sponsorPromotionSubmission.model')
 let supportLinkSettingsModel = require('../models/supportLinkSettings.model')
+let taskControlSettingsModel = require('../models/taskControlSettings.model')
+let adsManagementSettingsModel = require('../models/adsManagementSettings.model')
+
+const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall']
+
+async function getTaskControl(taskType) {
+  if (!CONTROLLED_TASK_TYPES.includes(taskType)) {
+    return null
+  }
+  return taskControlSettingsModel.getControl(taskType)
+}
+
+function evaluateAdDecision(taskRule, actionCount = 0) {
+  const count = Math.max(0, Number(actionCount) || 0)
+  const interstitialAfter = Math.max(1, Number(taskRule?.InterstitialAfterCount) || 1)
+  const rewardedAfter = Math.max(1, Number(taskRule?.RewardedAfterCount) || 1)
+  return {
+    showBanner: Boolean(taskRule?.BannerEnabled),
+    showRewarded: Boolean(taskRule?.RewardedEnabled),
+    showInterstitial: Boolean(taskRule?.InterstitialEnabled),
+    shouldShowInterstitialNow: Boolean(taskRule?.InterstitialEnabled) && count > 0 && (count % interstitialAfter === 0),
+    shouldShowRewardedNow: Boolean(taskRule?.RewardedEnabled) && count > 0 && (count % rewardedAfter === 0),
+    interstitialAfterCount: interstitialAfter,
+    rewardedAfterCount: rewardedAfter
+  }
+}
 
 // Function to generate unique referCode (format: PRK08F9 - 3 letters + 2 digits + 1 letter)
 function generateReferCode() {
@@ -491,6 +517,73 @@ const verifyToken = async (req, res, next) => {
   }
 }
 
+// Public ads settings API
+router.get('/ads/settings/public', async (req, res) => {
+  try {
+    const settings = await adsManagementSettingsModel.getSettings()
+    return res.json({
+      message: "Ads settings retrieved successfully",
+      data: settings
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Authenticated ads settings API
+router.get('/ads/settings', verifyToken, async (req, res) => {
+  try {
+    const settings = await adsManagementSettingsModel.getSettings()
+    return res.json({
+      message: "Ads settings retrieved successfully",
+      data: settings
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Ads decision API by task and action count
+router.get('/ads/decision', async (req, res) => {
+  try {
+    const { taskType, actionCount = 0 } = req.query
+    const settings = await adsManagementSettingsModel.getSettings()
+    const taskRule = settings.TaskRules.find(rule => rule.TaskType === taskType)
+
+    if (!taskRule) {
+      return res.status(404).json({
+        message: "Task ad rule not found"
+      })
+    }
+
+    const decision = evaluateAdDecision(taskRule, actionCount)
+    return res.json({
+      message: "Ads decision evaluated successfully",
+      data: {
+        taskType: taskType,
+        actionCount: Number(actionCount) || 0,
+        globalAdsEnabled: settings.GlobalAdsEnabled,
+        bannerAdsEnabled: settings.BannerAdsEnabled,
+        rewardedAdsEnabled: settings.RewardedAdsEnabled,
+        interstitialAdsEnabled: settings.InterstitialAdsEnabled,
+        taskActive: taskRule.IsActive,
+        decision: decision
+      }
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
 // Get User Profile API
 router.get('/profile', verifyToken, async (req, res) => {
   try {
@@ -860,6 +953,13 @@ router.post('/captcha/solve', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id
     const { Captcha } = req.body
+    const captchaControl = await getTaskControl('Captcha')
+
+    if (captchaControl && captchaControl.IsActive === false) {
+      return res.status(400).json({
+        message: "Captcha task is currently disabled by admin"
+      })
+    }
     
     if (!Captcha) {
       return res.status(400).json({
@@ -899,9 +999,12 @@ router.post('/captcha/solve', verifyToken, async (req, res) => {
       }
     })
 
-    if (todaySolves >= settings.DailyCaptchaLimit) {
+    const finalCaptchaLimit = captchaControl && captchaControl.DailyLimit !== null && captchaControl.DailyLimit !== undefined
+      ? captchaControl.DailyLimit
+      : settings.DailyCaptchaLimit
+    if (todaySolves >= finalCaptchaLimit) {
       return res.status(400).json({
-        message: `Daily captcha limit reached. You can solve ${settings.DailyCaptchaLimit} captchas per day.`
+        message: `Daily captcha limit reached. You can solve ${finalCaptchaLimit} captchas per day.`
       })
     }
 
@@ -914,10 +1017,14 @@ router.post('/captcha/solve', verifyToken, async (req, res) => {
     }
 
     // Add reward to user
+    const rewardPerCaptcha = captchaControl && captchaControl.CoinsPerTask !== null && captchaControl.CoinsPerTask !== undefined
+      ? captchaControl.CoinsPerTask
+      : settings.RewardPerCaptcha
+
     if (settings.RewardType === 'Coins') {
-      user.Coins = (user.Coins || 0) + settings.RewardPerCaptcha
+      user.Coins = (user.Coins || 0) + rewardPerCaptcha
     } else if (settings.RewardType === 'WalletBalance') {
-      user.WalletBalance = (user.WalletBalance || 0) + settings.RewardPerCaptcha
+      user.WalletBalance = (user.WalletBalance || 0) + rewardPerCaptcha
     }
     await user.save()
 
@@ -925,19 +1032,20 @@ router.post('/captcha/solve', verifyToken, async (req, res) => {
     await captchaSolveModel.create({
       UserId: userId,
       SolveDate: new Date(),
-      RewardAmount: settings.RewardPerCaptcha,
+      RewardAmount: rewardPerCaptcha,
       RewardType: settings.RewardType
     })
 
     return res.json({
       message: "Captcha solved successfully",
       data: {
-        RewardAmount: settings.RewardPerCaptcha,
+        RewardAmount: rewardPerCaptcha,
         RewardType: settings.RewardType,
         TodaySolves: todaySolves + 1,
-        DailyLimit: settings.DailyCaptchaLimit,
+        DailyLimit: finalCaptchaLimit,
         Coins: user.Coins,
-        WalletBalance: user.WalletBalance
+        WalletBalance: user.WalletBalance,
+        adsEnabled: captchaControl ? captchaControl.AdsEnabled : true
       }
     })
 
@@ -1540,11 +1648,62 @@ router.get('/withdrawal/requests', verifyToken, async (req, res) => {
 
 // ==================== APP INSTALLATION APIs ====================
 
+// Public task controls (for ads/limit/coin configuration in app)
+router.get('/task-controls/public', async (req, res) => {
+  try {
+    const controls = await Promise.all(
+      CONTROLLED_TASK_TYPES.map(async (taskType) => getTaskControl(taskType))
+    )
+    return res.json({
+      message: "Task controls retrieved successfully",
+      data: controls
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Authenticated task controls
+router.get('/task-controls', verifyToken, async (req, res) => {
+  try {
+    const controls = await Promise.all(
+      CONTROLLED_TASK_TYPES.map(async (taskType) => getTaskControl(taskType))
+    )
+    return res.json({
+      message: "Task controls retrieved successfully",
+      data: controls
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
 // Get All Available Apps API
 router.get('/apps', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id
     const { filter, difficulty } = req.query
+    const appInstallControl = await getTaskControl('AppInstall')
+
+    if (appInstallControl && appInstallControl.IsActive === false) {
+      return res.json({
+        message: "App install task is currently disabled by admin",
+        data: {
+          apps: [],
+          totalApps: 0,
+          availableApps: 0,
+          pendingApps: 0,
+          approvedApps: 0,
+          taskControl: appInstallControl
+        }
+      })
+    }
     
     // Build query - only show active apps
     let query = { Status: 'Active' }
@@ -1610,7 +1769,9 @@ router.get('/apps', verifyToken, async (req, res) => {
         appName: app.AppName,
         appImage: app.AppImage,
         appDownloadUrl: app.AppDownloadUrl,
-        rewardCoins: app.RewardCoins,
+        rewardCoins: appInstallControl && appInstallControl.CoinsPerTask !== null && appInstallControl.CoinsPerTask !== undefined
+          ? appInstallControl.CoinsPerTask
+          : app.RewardCoins,
         difficulty: app.Difficulty,
         description: app.Description,
         userStatus: userStatus, // available, pending, approved, rejected
@@ -1626,7 +1787,8 @@ router.get('/apps', verifyToken, async (req, res) => {
         totalApps: appsWithStatus.length,
         availableApps: appsWithStatus.filter(a => a.userStatus === 'available').length,
         pendingApps: appsWithStatus.filter(a => a.userStatus === 'pending').length,
-        approvedApps: appsWithStatus.filter(a => a.userStatus === 'approved').length
+        approvedApps: appsWithStatus.filter(a => a.userStatus === 'approved').length,
+        taskControl: appInstallControl
       }
     })
 
@@ -1645,6 +1807,27 @@ router.post('/apps/:appId/submit', verifyToken, upload.single('screenshot'), asy
     const userId = req.user.id
     const { appId } = req.params
     let screenshotUrl = null
+    const appInstallControl = await getTaskControl('AppInstall')
+
+    if (appInstallControl && appInstallControl.IsActive === false) {
+      return res.status(400).json({
+        message: "App install task is currently disabled by admin"
+      })
+    }
+
+    if (appInstallControl && appInstallControl.DailyLimit !== null && appInstallControl.DailyLimit !== undefined) {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const submissionsToday = await appInstallationSubmissionModel.countDocuments({
+        UserId: userId,
+        createdAt: { $gte: today }
+      })
+      if (submissionsToday >= appInstallControl.DailyLimit) {
+        return res.status(400).json({
+          message: `Daily app-install submission limit reached. Max allowed: ${appInstallControl.DailyLimit}`
+        })
+      }
+    }
 
     // Check if app exists and is active
     const app = await appModel.findById(appId)
@@ -2385,6 +2568,7 @@ function getTodayDate() {
 router.get('/scratchcard/dailylimit', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id
+    const scratchDailyControl = await getTaskControl('ScratchCardDailyLimit')
     
     let user = await userModel.findById(userId)
     if (!user) {
@@ -2410,17 +2594,18 @@ router.get('/scratchcard/dailylimit', verifyToken, async (req, res) => {
       })
     }
 
-    if (!settings.IsActive) {
+    if (!settings.IsActive || (scratchDailyControl && scratchDailyControl.IsActive === false)) {
       return res.json({
         message: "Scratch card daily limit info retrieved successfully",
         data: {
           isActive: false,
-          dailyLimit: settings.DailyLimit,
+          dailyLimit: scratchDailyControl && scratchDailyControl.DailyLimit !== null && scratchDailyControl.DailyLimit !== undefined ? scratchDailyControl.DailyLimit : settings.DailyLimit,
           rewardAmount: settings.RewardAmount,
-          rewardCoins: settings.RewardCoins,
+          rewardCoins: scratchDailyControl && scratchDailyControl.CoinsPerTask !== null && scratchDailyControl.CoinsPerTask !== undefined ? scratchDailyControl.CoinsPerTask : settings.RewardCoins,
           claimsToday: 0,
           remainingClaims: 0,
-          canClaim: false
+          canClaim: false,
+          adsEnabled: scratchDailyControl ? scratchDailyControl.AdsEnabled : true
         }
       })
     }
@@ -2434,19 +2619,27 @@ router.get('/scratchcard/dailylimit', verifyToken, async (req, res) => {
       ClaimDate: todayDate
     })
 
-    const remainingClaims = Math.max(0, settings.DailyLimit - claimsToday)
-    const canClaim = remainingClaims > 0 && (settings.RewardAmount > 0 || settings.RewardCoins > 0)
+    const effectiveDailyLimit = scratchDailyControl && scratchDailyControl.DailyLimit !== null && scratchDailyControl.DailyLimit !== undefined
+      ? scratchDailyControl.DailyLimit
+      : settings.DailyLimit
+    const effectiveRewardCoins = scratchDailyControl && scratchDailyControl.CoinsPerTask !== null && scratchDailyControl.CoinsPerTask !== undefined
+      ? scratchDailyControl.CoinsPerTask
+      : settings.RewardCoins
+
+    const remainingClaims = Math.max(0, effectiveDailyLimit - claimsToday)
+    const canClaim = remainingClaims > 0 && (settings.RewardAmount > 0 || effectiveRewardCoins > 0)
 
     return res.json({
       message: "Scratch card daily limit info retrieved successfully",
       data: {
         isActive: settings.IsActive,
-        dailyLimit: settings.DailyLimit,
+        dailyLimit: effectiveDailyLimit,
         rewardAmount: settings.RewardAmount,
-        rewardCoins: settings.RewardCoins,
+        rewardCoins: effectiveRewardCoins,
         claimsToday: claimsToday,
         remainingClaims: remainingClaims,
-        canClaim: canClaim
+        canClaim: canClaim,
+        adsEnabled: scratchDailyControl ? scratchDailyControl.AdsEnabled : true
       }
     })
 
@@ -2463,6 +2656,7 @@ router.get('/scratchcard/dailylimit', verifyToken, async (req, res) => {
 router.post('/scratchcard/dailylimit/claim', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id
+    const scratchDailyControl = await getTaskControl('ScratchCardDailyLimit')
     
     let user = await userModel.findById(userId)
     if (!user) {
@@ -2479,7 +2673,7 @@ router.post('/scratchcard/dailylimit/claim', verifyToken, async (req, res) => {
       })
     }
 
-    if (!settings.IsActive) {
+    if (!settings.IsActive || (scratchDailyControl && scratchDailyControl.IsActive === false)) {
       return res.status(400).json({
         message: "Scratch card daily limit feature is currently disabled"
       })
@@ -2502,9 +2696,13 @@ router.post('/scratchcard/dailylimit/claim', verifyToken, async (req, res) => {
     })
 
     // Check if user has reached daily limit
-    if (claimsToday >= settings.DailyLimit) {
+    const effectiveDailyLimit = scratchDailyControl && scratchDailyControl.DailyLimit !== null && scratchDailyControl.DailyLimit !== undefined
+      ? scratchDailyControl.DailyLimit
+      : settings.DailyLimit
+
+    if (claimsToday >= effectiveDailyLimit) {
       return res.status(400).json({
-        message: `Daily limit reached. You have already claimed ${claimsToday} time(s) today. Maximum allowed: ${settings.DailyLimit}`
+        message: `Daily limit reached. You have already claimed ${claimsToday} time(s) today. Maximum allowed: ${effectiveDailyLimit}`
       })
     }
 
@@ -2524,9 +2722,9 @@ router.post('/scratchcard/dailylimit/claim', verifyToken, async (req, res) => {
         ClaimDate: todayDate
       })
       
-      if (newClaimsToday >= settings.DailyLimit) {
+      if (newClaimsToday >= effectiveDailyLimit) {
         return res.status(400).json({
-          message: `Daily limit reached. You have already claimed ${newClaimsToday} time(s) today. Maximum allowed: ${settings.DailyLimit}`
+          message: `Daily limit reached. You have already claimed ${newClaimsToday} time(s) today. Maximum allowed: ${effectiveDailyLimit}`
         })
       }
       throw createError
@@ -2536,9 +2734,13 @@ router.post('/scratchcard/dailylimit/claim', verifyToken, async (req, res) => {
     let coinsAdded = 0
     let amountAdded = 0
 
-    if (settings.RewardCoins > 0) {
-      user.Coins = (user.Coins || 0) + settings.RewardCoins
-      coinsAdded = settings.RewardCoins
+    const rewardCoins = scratchDailyControl && scratchDailyControl.CoinsPerTask !== null && scratchDailyControl.CoinsPerTask !== undefined
+      ? scratchDailyControl.CoinsPerTask
+      : settings.RewardCoins
+
+    if (rewardCoins > 0) {
+      user.Coins = (user.Coins || 0) + rewardCoins
+      coinsAdded = rewardCoins
     }
 
     if (settings.RewardAmount > 0) {
@@ -2566,7 +2768,7 @@ router.post('/scratchcard/dailylimit/claim', verifyToken, async (req, res) => {
         currentCoins: user.Coins || 0,
         currentWalletBalance: user.WalletBalance || 0,
         claimsToday: updatedClaimsToday,
-        remainingClaims: Math.max(0, settings.DailyLimit - updatedClaimsToday),
+        remainingClaims: Math.max(0, effectiveDailyLimit - updatedClaimsToday),
         claimedAt: claimRecord.createdAt
       }
     })
@@ -2586,6 +2788,7 @@ router.post('/scratchcard/dailylimit/claim', verifyToken, async (req, res) => {
 router.get('/dailyspin/status', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id
+    const spinControl = await getTaskControl('DailySpin')
 
     const user = await userModel.findById(userId)
     if (!user) {
@@ -2618,7 +2821,9 @@ router.get('/dailyspin/status', verifyToken, async (req, res) => {
     ])
     const spinsUsedToday = todayAgg[0]?.total || 0
 
-    const dailyLimit = settings.DailySpinLimit || 10
+    const dailyLimit = spinControl && spinControl.DailyLimit !== null && spinControl.DailyLimit !== undefined
+      ? spinControl.DailyLimit
+      : (settings.DailySpinLimit || 10)
     const remainingToday = Math.max(dailyLimit - spinsUsedToday, 0)
 
     // Total spins (lifetime)
@@ -2634,7 +2839,9 @@ router.get('/dailyspin/status', verifyToken, async (req, res) => {
         dailySpinLimit: dailyLimit,
         spinsUsedToday: spinsUsedToday,
         spinsRemainingToday: remainingToday,
-        totalSpins: totalSpins
+        totalSpins: totalSpins,
+        isActive: spinControl ? spinControl.IsActive : true,
+        adsEnabled: spinControl ? spinControl.AdsEnabled : true
       }
     })
   } catch (err) {
@@ -2651,6 +2858,13 @@ router.post('/dailyspin/use', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id
     const { SpinCount } = req.body
+    const spinControl = await getTaskControl('DailySpin')
+
+    if (spinControl && spinControl.IsActive === false) {
+      return res.status(400).json({
+        message: "Daily spin task is currently disabled by admin"
+      })
+    }
 
     const user = await userModel.findById(userId)
     if (!user) {
@@ -2677,7 +2891,9 @@ router.post('/dailyspin/use', verifyToken, async (req, res) => {
       settings = { DailySpinLimit: 10 }
     }
 
-    const dailyLimit = settings.DailySpinLimit || 10
+    const dailyLimit = spinControl && spinControl.DailyLimit !== null && spinControl.DailyLimit !== undefined
+      ? spinControl.DailyLimit
+      : (settings.DailySpinLimit || 10)
 
     // Today range
     const today = new Date()
