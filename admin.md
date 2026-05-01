@@ -3806,3 +3806,27 @@ Content-Type: application/json
   "RewardedAfterCount": 2
 }
 ```
+
+---
+
+## Withdrawal Daily Limit Control (Admin)
+
+### POST /admin/withdrawal/threshold (Updated)
+Now supports daily withdrawal request frequency control.
+
+**Request Body:**
+```json
+{
+  "MinimumWithdrawalAmount": 100,
+  "DailyWithdrawalRequestLimit": 1
+}
+```
+
+`DailyWithdrawalRequestLimit` allowed values:
+- `1` => Din me ek withdrawal request
+- `2` => Din me do withdrawal request
+
+### GET /admin/withdrawal/threshold (Updated)
+Now returns both:
+- `MinimumWithdrawalAmount`
+- `DailyWithdrawalRequestLimit`

@@ -6,6 +6,12 @@ let schema = new mongoose.Schema({
         required: true,
         default: 100,
         min: 1
+    },
+    DailyWithdrawalRequestLimit: {
+        type: Number,
+        required: true,
+        default: 1,
+        enum: [1, 2]
     }
 }, {
     timestamps: true
@@ -16,8 +22,15 @@ schema.statics.getSettings = async function() {
     let settings = await this.findOne()
     if (!settings) {
         settings = await this.create({
-            MinimumWithdrawalAmount: 100
+            MinimumWithdrawalAmount: 100,
+            DailyWithdrawalRequestLimit: 1
         })
+    }
+
+    // backward compatibility for existing settings docs
+    if (!settings.DailyWithdrawalRequestLimit || ![1, 2].includes(settings.DailyWithdrawalRequestLimit)) {
+        settings.DailyWithdrawalRequestLimit = 1
+        await settings.save()
     }
     return settings
 }

@@ -1464,13 +1464,25 @@ router.get('/withdrawal/threshold', verifyToken, async (req, res) => {
 
     // Get withdrawal settings
     let settings = await withdrawalSettingsModel.getSettings()
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const tomorrowStart = new Date(todayStart)
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1)
+
+    const requestsToday = await withdrawalRequestModel.countDocuments({
+      UserId: userId,
+      createdAt: { $gte: todayStart, $lt: tomorrowStart }
+    })
 
     return res.json({
       message: "Withdrawal threshold retrieved successfully",
       data: {
         minimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
+        dailyWithdrawalRequestLimit: settings.DailyWithdrawalRequestLimit,
+        requestsToday: requestsToday,
+        remainingRequestsToday: Math.max(0, settings.DailyWithdrawalRequestLimit - requestsToday),
         currentWalletBalance: user.WalletBalance || 0,
-        canWithdraw: (user.WalletBalance || 0) >= settings.MinimumWithdrawalAmount
+        canWithdraw: (user.WalletBalance || 0) >= settings.MinimumWithdrawalAmount && requestsToday < settings.DailyWithdrawalRequestLimit
       }
     })
 
@@ -1543,15 +1555,21 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
       }
     }
 
-    // Check for pending withdrawal requests
-    const pendingRequests = await withdrawalRequestModel.countDocuments({
+    // Check daily withdrawal request count limit
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const tomorrowStart = new Date(todayStart)
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1)
+
+    const requestsToday = await withdrawalRequestModel.countDocuments({
       UserId: userId,
-      Status: 'Pending'
+      createdAt: { $gte: todayStart, $lt: tomorrowStart }
     })
 
-    if (pendingRequests > 0) {
+    const dailyLimit = withdrawalSettings.DailyWithdrawalRequestLimit || 1
+    if (requestsToday >= dailyLimit) {
       return res.status(400).json({
-        message: "You have a pending withdrawal request. Please wait for it to be processed."
+        message: `Daily withdrawal request limit reached. You can place only ${dailyLimit} withdrawal request(s) per day.`
       })
     }
 
@@ -1581,6 +1599,8 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
         paymentMethod: withdrawalRequest.PaymentMethod,
         status: withdrawalRequest.Status,
         remainingWalletBalance: user.WalletBalance,
+        requestsToday: requestsToday + 1,
+        remainingRequestsToday: Math.max(0, dailyLimit - (requestsToday + 1)),
         createdAt: withdrawalRequest.createdAt
       }
     })
@@ -1633,7 +1653,8 @@ router.get('/withdrawal/requests', verifyToken, async (req, res) => {
       data: {
         requests: formattedRequests,
         totalRequests: formattedRequests.length,
-        currentWalletBalance: user.WalletBalance || 0
+        currentWalletBalance: user.WalletBalance || 0,
+        dailyWithdrawalRequestLimit: (await withdrawalSettingsModel.getSettings()).DailyWithdrawalRequestLimit
       }
     })
 

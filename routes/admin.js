@@ -2441,7 +2441,7 @@ router.get('/scratchcard/dailylimit/settings', verifyToken, async (req, res) => 
 // Set Withdrawal Threshold API
 router.post('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
   try {
-    const { MinimumWithdrawalAmount } = req.body
+    const { MinimumWithdrawalAmount, DailyWithdrawalRequestLimit } = req.body
     
     if (MinimumWithdrawalAmount === undefined || MinimumWithdrawalAmount === null) {
       return res.status(400).json({
@@ -2461,14 +2461,24 @@ router.post('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
       })
     }
 
+    if (DailyWithdrawalRequestLimit !== undefined && ![1, 2].includes(DailyWithdrawalRequestLimit)) {
+      return res.status(400).json({
+        message: "DailyWithdrawalRequestLimit must be either 1 or 2"
+      })
+    }
+
     // Update or create settings
     let settings = await withdrawalSettingsModel.findOne()
     if (settings) {
       settings.MinimumWithdrawalAmount = MinimumWithdrawalAmount
+      if (DailyWithdrawalRequestLimit !== undefined) {
+        settings.DailyWithdrawalRequestLimit = DailyWithdrawalRequestLimit
+      }
       await settings.save()
     } else {
       settings = await withdrawalSettingsModel.create({
-        MinimumWithdrawalAmount: MinimumWithdrawalAmount
+        MinimumWithdrawalAmount: MinimumWithdrawalAmount,
+        DailyWithdrawalRequestLimit: DailyWithdrawalRequestLimit !== undefined ? DailyWithdrawalRequestLimit : 1
       })
     }
 
@@ -2476,6 +2486,7 @@ router.post('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
       message: "Withdrawal threshold updated successfully",
       data: {
         MinimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
+        DailyWithdrawalRequestLimit: settings.DailyWithdrawalRequestLimit,
         updatedAt: settings.updatedAt
       }
     })
@@ -2498,6 +2509,7 @@ router.get('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
       message: "Withdrawal threshold retrieved successfully",
       data: {
         MinimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
+        DailyWithdrawalRequestLimit: settings.DailyWithdrawalRequestLimit,
         updatedAt: settings.updatedAt
       }
     })

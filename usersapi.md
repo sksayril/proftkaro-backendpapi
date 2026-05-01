@@ -4624,3 +4624,32 @@ GET /users/ads/decision?taskType=ScratchCard&actionCount=4
   }
 }
 ```
+
+---
+
+## Withdrawal Daily Limit (User Side)
+
+### GET /users/withdrawal/threshold (Updated)
+Now also returns daily withdrawal request limit information:
+- `dailyWithdrawalRequestLimit`
+- `requestsToday`
+- `remainingRequestsToday`
+- `canWithdraw` (wallet + daily limit dono consider karta hai)
+
+### POST /users/withdrawal/request (Updated)
+Now enforces admin daily request limit (`1` or `2` per day).
+
+If limit reached:
+```json
+{
+  "message": "Daily withdrawal request limit reached. You can place only 1 withdrawal request(s) per day."
+}
+```
+
+Success response now also includes:
+- `requestsToday`
+- `remainingRequestsToday`
+
+### GET /users/withdrawal/requests (Updated)
+Now also returns:
+- `dailyWithdrawalRequestLimit`
