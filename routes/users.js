@@ -22,6 +22,7 @@ const upload = multer({
     }
   }
 });
+// test
 
 let userModel = require('../models/user.model')
 let captchaSettingsModel = require('../models/captchaSettings.model')
