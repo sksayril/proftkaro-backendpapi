@@ -4339,6 +4339,44 @@ These jobs run automatically when the server starts and require no manual interv
 
 ---
 
+## Social Links API
+
+Public links for Telegram, YouTube, and Instagram (configured by admin). Use **`GET /users/social-links/public`** — **no JWT required**.
+
+### GET /users/social-links/public
+Returns Telegram, YouTube, and Instagram URLs for the mobile app / website footer.
+
+**Response (Success — active, 200):**
+```json
+{
+  "message": "Social links retrieved successfully",
+  "data": {
+    "telegramLink": "https://t.me/example",
+    "youtubeLink": "https://www.youtube.com/@example",
+    "instagramLink": "https://www.instagram.com/example",
+    "isActive": true
+  }
+}
+```
+
+**Response (admin disabled social links, 200):**
+```json
+{
+  "message": "Social links retrieved successfully",
+  "data": {
+    "telegramLink": null,
+    "youtubeLink": null,
+    "instagramLink": null,
+    "isActive": false,
+    "note": "Social links are currently unavailable"
+  }
+}
+```
+
+Individual link fields may be `null` if the admin cleared them while `isActive` is still `true`.
+
+---
+
 ## Support Link API
 
 Users can retrieve support contact information including support link, email, phone, and WhatsApp.
@@ -4475,6 +4513,8 @@ fetch('http://localhost:3100/users/support/link', {
 Public API for task controls (no auth required).  
 Useful for showing ads-control, limit-control, coin-control in app startup screens.
 
+The `data` array includes one entry per controlled task type, including **`Quiz`** (quiz enable/disable, daily attempt limit, optional coin reward override, ads flag).
+
 **Response (Success - 200):**
 ```json
 {
@@ -4488,6 +4528,13 @@ Useful for showing ads-control, limit-control, coin-control in app startup scree
       "CoinsPerTask": 2
     },
     {
+      "TaskType": "Quiz",
+      "IsActive": true,
+      "AdsEnabled": true,
+      "DailyLimit": 15,
+      "CoinsPerTask": 3
+    },
+    {
       "TaskType": "AppInstall",
       "IsActive": true,
       "AdsEnabled": false,
@@ -4496,6 +4543,40 @@ Useful for showing ads-control, limit-control, coin-control in app startup scree
     }
   ]
 }
+```
+
+---
+
+### GET /users/quiz/settings/public
+Public endpoint for **quiz-only** configuration (no auth). Use when the app needs just quiz limits and on/off without loading all task controls.
+
+**Fields:**
+- `IsActive` — when `false`, treat the quiz feature as disabled in the client.
+- `DailyLimit` — max quiz attempts per user per calendar day (integer), or `null` if admin did not set a limit (client may fall back to its own default or treat as unlimited).
+- `AdsEnabled`, `CoinsPerTask` — same meaning as other task controls; optional for quiz UI/rewards.
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Quiz settings retrieved successfully",
+  "data": {
+    "TaskType": "Quiz",
+    "IsActive": true,
+    "AdsEnabled": true,
+    "DailyLimit": 15,
+    "CoinsPerTask": 3
+  }
+}
+```
+
+---
+
+### GET /users/quiz/settings
+Authenticated version of quiz settings (same response shape as the public quiz endpoint).
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
 ```
 
 ---

@@ -45,10 +45,11 @@ let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
 let signupBonusSettingsModel = require('../models/signupBonusSettings.model')
 let sponsorPromotionSubmissionModel = require('../models/sponsorPromotionSubmission.model')
 let supportLinkSettingsModel = require('../models/supportLinkSettings.model')
+let socialLinksSettingsModel = require('../models/socialLinksSettings.model')
 let taskControlSettingsModel = require('../models/taskControlSettings.model')
 let adsManagementSettingsModel = require('../models/adsManagementSettings.model')
 
-const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall']
+const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall', 'Quiz']
 
 async function getTaskControl(taskType) {
   if (!CONTROLLED_TASK_TYPES.includes(taskType)) {
@@ -1706,6 +1707,56 @@ router.get('/task-controls', verifyToken, async (req, res) => {
   }
 })
 
+function quizSettingsFromControl (control) {
+  if (!control) {
+    return {
+      TaskType: 'Quiz',
+      IsActive: true,
+      AdsEnabled: true,
+      DailyLimit: null,
+      CoinsPerTask: null
+    }
+  }
+  return {
+    TaskType: control.TaskType || 'Quiz',
+    IsActive: control.IsActive !== false,
+    AdsEnabled: control.AdsEnabled !== false,
+    DailyLimit: control.DailyLimit != null ? control.DailyLimit : null,
+    CoinsPerTask: control.CoinsPerTask != null ? control.CoinsPerTask : null
+  }
+}
+
+// Public Quiz settings — daily limit, enable/disable, ads/coins overrides (managed via admin task-controls)
+router.get('/quiz/settings/public', async (req, res) => {
+  try {
+    const control = await getTaskControl('Quiz')
+    return res.json({
+      message: "Quiz settings retrieved successfully",
+      data: quizSettingsFromControl(control)
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.get('/quiz/settings', verifyToken, async (req, res) => {
+  try {
+    const control = await getTaskControl('Quiz')
+    return res.json({
+      message: "Quiz settings retrieved successfully",
+      data: quizSettingsFromControl(control)
+    })
+  } catch (err) {
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
 // Get All Available Apps API
 router.get('/apps', verifyToken, async (req, res) => {
   try {
@@ -3304,6 +3355,41 @@ router.get('/sponsor/promotion', verifyToken, async (req, res) => {
 
   } catch (err) {
     console.error('Get Sponsor Promotion Submissions - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== SOCIAL LINKS API ====================
+
+router.get('/social-links/public', async (req, res) => {
+  try {
+    let settings = await socialLinksSettingsModel.getSettings()
+    if (!settings.IsActive) {
+      return res.json({
+        message: "Social links retrieved successfully",
+        data: {
+          telegramLink: null,
+          youtubeLink: null,
+          instagramLink: null,
+          isActive: false,
+          note: "Social links are currently unavailable"
+        }
+      })
+    }
+    return res.json({
+      message: "Social links retrieved successfully",
+      data: {
+        telegramLink: settings.TelegramLink || null,
+        youtubeLink: settings.YouTubeLink || null,
+        instagramLink: settings.InstagramLink || null,
+        isActive: true
+      }
+    })
+  } catch (err) {
+    console.error('Get Social Links (public) - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message

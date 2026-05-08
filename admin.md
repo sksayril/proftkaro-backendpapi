@@ -3099,6 +3099,58 @@ Content-Type: application/json
 
 ---
 
+## Social Links Management APIs
+
+Admins can set **Telegram**, **YouTube**, and **Instagram** URLs. Users read them via **`GET /users/social-links/public`** (no token).
+
+### GET /admin/social-links
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (Success — 200):**
+```json
+{
+  "message": "Social links settings retrieved successfully",
+  "data": {
+    "_id": "...",
+    "TelegramLink": "https://t.me/example",
+    "YouTubeLink": "https://www.youtube.com/@example",
+    "InstagramLink": "https://www.instagram.com/example",
+    "IsActive": true,
+    "createdAt": "...",
+    "updatedAt": "..."
+  }
+}
+```
+
+### PUT /admin/social-links
+
+All body fields are optional. Omit a field to leave it unchanged. Send `null` or `""` to clear that link.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request body example:**
+```json
+{
+  "TelegramLink": "https://t.me/my-channel",
+  "YouTubeLink": "https://www.youtube.com/@my-channel",
+  "InstagramLink": "https://www.instagram.com/my-page",
+  "IsActive": true
+}
+```
+
+- Each link must be a valid **`http`** or **`https`** URL when set.
+- **`IsActive`**: When `false`, the public API returns all links as `null` with a short note.
+
+---
+
 ## Notes for Support Link Management System
 
 - Support link management APIs require JWT token authentication
@@ -3625,6 +3677,7 @@ Get centralized task controls for:
 - `DailySpin`
 - `ScratchCardDailyLimit`
 - `AppInstall`
+- `Quiz` (enable/disable quiz, optional daily quiz limit `DailyLimit`, `CoinsPerTask`, `AdsEnabled`)
 
 **Headers:**
 ```
@@ -3643,7 +3696,17 @@ Content-Type: application/json
 ```
 
 **Path Param:**
-- `taskType`: `Captcha` | `DailySpin` | `ScratchCardDailyLimit` | `AppInstall`
+- `taskType`: `Captcha` | `DailySpin` | `ScratchCardDailyLimit` | `AppInstall` | `Quiz`
+
+**Quiz example** — disable quiz feature and remove daily cap:
+```json
+{ "IsActive": false, "DailyLimit": null }
+```
+
+**Quiz example** — enable with 20 attempts per user per day:
+```json
+{ "IsActive": true, "DailyLimit": 20 }
+```
 
 **Request Body (any fields optional):**
 ```json

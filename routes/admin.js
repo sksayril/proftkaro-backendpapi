@@ -25,10 +25,11 @@ let captchaSolveModel = require('../models/captchaSolve.model')
 let dailyBonusClaimModel = require('../models/dailyBonusClaim.model')
 let sponsorPromotionSubmissionModel = require('../models/sponsorPromotionSubmission.model')
 let supportLinkSettingsModel = require('../models/supportLinkSettings.model')
+let socialLinksSettingsModel = require('../models/socialLinksSettings.model')
 let taskControlSettingsModel = require('../models/taskControlSettings.model')
 let adsManagementSettingsModel = require('../models/adsManagementSettings.model')
 
-const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall']
+const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall', 'Quiz']
 
 function getStartOfToday() {
   const date = new Date()
@@ -3678,6 +3679,79 @@ router.put('/support/link', verifyAdminToken, async (req, res) => {
 
   } catch (err) {
     console.error('Update Support Link - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== SOCIAL LINKS APIs (Telegram / YouTube / Instagram) ====================
+
+function resolveOptionalHttpUrl (value, fieldLabel) {
+  if (value === undefined) return { ok: true, mode: 'omit' }
+  if (value === null || (typeof value === 'string' && value.trim() === '')) {
+    return { ok: true, mode: 'clear' }
+  }
+  if (typeof value !== 'string') {
+    return { ok: false, message: `${fieldLabel} must be a string, null, or empty string to clear` }
+  }
+  try {
+    const u = new URL(value.trim())
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      return { ok: false, message: `${fieldLabel} must use http or https` }
+    }
+    return { ok: true, mode: 'set', value: value.trim() }
+  } catch (e) {
+    return { ok: false, message: `${fieldLabel} must be a valid URL` }
+  }
+}
+
+router.get('/social-links', verifyAdminToken, async (req, res) => {
+  try {
+    const settings = await socialLinksSettingsModel.getSettings()
+    return res.json({
+      message: "Social links settings retrieved successfully",
+      data: settings
+    })
+  } catch (err) {
+    console.error('Get Social Links - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.put('/social-links', verifyAdminToken, async (req, res) => {
+  try {
+    const { IsActive } = req.body
+    const settings = await socialLinksSettingsModel.getSettings()
+
+    for (const [key, label] of [
+      ['TelegramLink', 'TelegramLink'],
+      ['YouTubeLink', 'YouTubeLink'],
+      ['InstagramLink', 'InstagramLink']
+    ]) {
+      const r = resolveOptionalHttpUrl(req.body[key], label)
+      if (!r.ok) {
+        return res.status(400).json({ message: r.message })
+      }
+      if (r.mode === 'set') settings[key] = r.value
+      if (r.mode === 'clear') settings[key] = null
+    }
+
+    if (IsActive !== undefined) {
+      settings.IsActive = Boolean(IsActive)
+    }
+
+    await settings.save()
+    return res.json({
+      message: "Social links settings updated successfully",
+      data: settings
+    })
+  } catch (err) {
+    console.error('Update Social Links - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
