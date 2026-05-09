@@ -4339,6 +4339,65 @@ These jobs run automatically when the server starts and require no manual interv
 
 ---
 
+## Popup template (public)
+
+Home-screen or promotional popup image and copy are configured by admin. The image file is stored on **AWS S3**; **MongoDB** stores the public `imageUrl` and text fields. Admin creates and edits the template via **`/admin/popup-template`** (see `admin.md`).
+
+### GET /users/popup-template/public
+
+**No authentication required.** Returns popup data only when `IsActive` is true and an `ImageUrl` is set in the database.
+
+**Endpoint:**
+```
+GET http://localhost:3100/users/popup-template/public
+```
+
+**Response (active popup, 200):**
+```json
+{
+  "message": "Popup template retrieved successfully",
+  "data": {
+    "isActive": true,
+    "imageUrl": "https://streaming-bucket-123.s3.us-east-1.amazonaws.com/popup-templates/1710000000000-banner.png",
+    "title": "Limited time",
+    "body": "Complete tasks to earn more",
+    "actionLabel": "OK",
+    "actionUrl": "https://example.com/offer"
+  }
+}
+```
+
+**Response (inactive or missing image, 200):**
+```json
+{
+  "message": "Popup template retrieved successfully",
+  "data": {
+    "isActive": false,
+    "imageUrl": null,
+    "title": null,
+    "body": null,
+    "actionLabel": null,
+    "actionUrl": null,
+    "note": "Popup is currently disabled"
+  }
+}
+```
+
+**Example (fetch in app):**
+```javascript
+fetch('http://localhost:3100/users/popup-template/public')
+  .then(r => r.json())
+  .then(({ data }) => {
+    if (data.isActive && data.imageUrl) {
+      // show popup with data.imageUrl, data.title, etc.
+    }
+  });
+```
+
+**Environment:** Same S3 bucket and region as other uploads (`AWS_S3_BUCKET`, `AWS_REGION`). MongoDB connection uses your existing `MONGODB_URI` (or project env) as for all other models.
+
+---
+
 ## Social Links API
 
 Public links for Telegram, YouTube, and Instagram (configured by admin). Use **`GET /users/social-links/public`** — **no JWT required**.

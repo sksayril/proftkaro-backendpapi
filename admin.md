@@ -3893,3 +3893,57 @@ Now supports daily withdrawal request frequency control.
 Now returns both:
 - `MinimumWithdrawalAmount`
 - `DailyWithdrawalRequestLimit`
+
+---
+
+## Popup template (admin)
+
+Popup promotional image and text are stored in MongoDB (`ImageUrl` points to AWS S3). The mobile app can load the public user API `GET /users/popup-template/public` (no auth).
+
+### GET /admin/popup-template
+
+Returns the current popup template document (including S3 `ImageUrl`).
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Success (200):**
+```json
+{
+  "message": "Popup template retrieved successfully",
+  "data": {
+    "_id": "...",
+    "Title": "New offer",
+    "Body": "Tap to learn more",
+    "ImageUrl": "https://streaming-bucket-123.s3.us-east-1.amazonaws.com/popup-templates/123-banner.png",
+    "ActionLabel": "Open",
+    "ActionUrl": "https://example.com",
+    "IsActive": true,
+    "createdAt": "...",
+    "updatedAt": "..."
+  }
+}
+```
+
+### POST /admin/popup-template
+
+Create or update the single popup template. On first save, an image is required: multipart field `image`, or JSON field `imageBase64` (optional `fileName`), or `ImageUrl` string.
+
+**Headers:** `Authorization: Bearer <JWT_TOKEN>`  
+**Content-Type:** `multipart/form-data` (with `image` file) **or** `application/json` (with `imageBase64` / `ImageUrl`).
+
+**JSON body fields (all optional except image on first create):**
+- `Title`, `Body`, `ActionLabel`, `ActionUrl`
+- `IsActive` (boolean)
+- `imageBase64`, `fileName`
+- `ImageUrl` (external URL; stored as-is)
+
+When a new image is uploaded to S3, the previous image is deleted from S3 if it belonged to the configured bucket.
+
+### PUT /admin/popup-template
+
+Partial update. Same image options as POST (`image` file, `imageBase64`, or `ImageUrl`). Text fields are updated only when present in the body. Set `ImageUrl` to `null` or `""` to clear the stored URL (admin should upload a new image before enabling the popup again).
+
+**Multipart example:** field `image` (file) plus optional text fields as form fields.

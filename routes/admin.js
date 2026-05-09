@@ -1,6 +1,21 @@
 var express = require('express');
 var router = express.Router();
+const multer = require('multer');
 const jwt = require('jsonwebtoken');
+const { uploadToS3, uploadBase64ToS3, deleteFromS3 } = require('../utilities/s3Upload');
+
+const popupUploadStorage = multer.memoryStorage();
+const popupUpload = multer({
+  storage: popupUploadStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true)
+    } else {
+      cb(new Error('Only image files are allowed'), false)
+    }
+  }
+})
 const { encryptPassword, decryptPassword } = require('../utilities/crypto');
 
 let adminModel = require('../models/admin.model')
@@ -28,6 +43,23 @@ let supportLinkSettingsModel = require('../models/supportLinkSettings.model')
 let socialLinksSettingsModel = require('../models/socialLinksSettings.model')
 let taskControlSettingsModel = require('../models/taskControlSettings.model')
 let adsManagementSettingsModel = require('../models/adsManagementSettings.model')
+let popupTemplateSettingsModel = require('../models/popupTemplateSettings.model')
+
+const S3_BUCKET = process.env.AWS_S3_BUCKET || 'streaming-bucket-123'
+
+function isOurS3ImageUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes(S3_BUCKET) && url.includes('.amazonaws.com')
+}
+
+async function tryDeleteOldPopupImage(url) {
+  if (!isOurS3ImageUrl(url)) return
+  try {
+    await deleteFromS3(url)
+  } catch (e) {
+    console.warn('Popup template: could not delete old S3 object:', e.message)
+  }
+}
 
 const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall', 'Quiz']
 
@@ -3882,6 +3914,209 @@ router.get('/users/:userId/activity', verifyAdminToken, async (req, res) => {
     })
   } catch (err) {
     console.error('Get User Activity - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== POPUP TEMPLATE (ADMIN) ====================
+
+router.get('/popup-template', verifyAdminToken, async (req, res) => {
+  try {
+    const settings = await popupTemplateSettingsModel.getSettings()
+    if (!settings) {
+      return res.json({
+        message: "Popup template retrieved successfully",
+        data: {
+          Title: '',
+          Body: '',
+          ImageUrl: null,
+          ActionLabel: '',
+          ActionUrl: '',
+          IsActive: false,
+          note: "No popup template saved yet"
+        }
+      })
+    }
+    return res.json({
+      message: "Popup template retrieved successfully",
+      data: {
+        _id: settings._id,
+        Title: settings.Title,
+        Body: settings.Body,
+        ImageUrl: settings.ImageUrl,
+        ActionLabel: settings.ActionLabel,
+        ActionUrl: settings.ActionUrl,
+        IsActive: settings.IsActive,
+        createdAt: settings.createdAt,
+        updatedAt: settings.updatedAt
+      }
+    })
+  } catch (err) {
+    console.error('Admin Get Popup Template - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.post('/popup-template', verifyAdminToken, popupUpload.single('image'), async (req, res) => {
+  try {
+    let settings = await popupTemplateSettingsModel.findOne()
+    const prevImage = settings?.ImageUrl
+
+    let imageUrl = settings?.ImageUrl || null
+    if (req.file) {
+      const fileName = req.file.originalname || `popup-${Date.now()}.jpg`
+      imageUrl = await uploadToS3(req.file.buffer, fileName, 'popup-templates', req.file.mimetype)
+      if (prevImage && prevImage !== imageUrl) {
+        await tryDeleteOldPopupImage(prevImage)
+      }
+    } else if (req.body.imageBase64) {
+      const fileName = req.body.fileName || `popup-${Date.now()}.jpg`
+      imageUrl = await uploadBase64ToS3(req.body.imageBase64, fileName, 'popup-templates')
+      if (prevImage && prevImage !== imageUrl) {
+        await tryDeleteOldPopupImage(prevImage)
+      }
+    } else if (req.body.ImageUrl !== undefined && req.body.ImageUrl !== null && req.body.ImageUrl !== '') {
+      imageUrl = String(req.body.ImageUrl).trim()
+    }
+
+    if (!settings) {
+      if (!imageUrl) {
+        return res.status(400).json({
+          message: "Image is required for the first save. Send multipart field \"image\", or JSON \"imageBase64\", or \"ImageUrl\"."
+        })
+      }
+      settings = await popupTemplateSettingsModel.create({
+        Title: req.body.Title != null ? String(req.body.Title) : '',
+        Body: req.body.Body != null ? String(req.body.Body) : '',
+        ImageUrl: imageUrl,
+        ActionLabel: req.body.ActionLabel != null ? String(req.body.ActionLabel) : '',
+        ActionUrl: req.body.ActionUrl != null ? String(req.body.ActionUrl) : '',
+        IsActive: req.body.IsActive === true || req.body.IsActive === 'true'
+      })
+    } else {
+      if (imageUrl) settings.ImageUrl = imageUrl
+      if (req.body.Title !== undefined) settings.Title = String(req.body.Title)
+      if (req.body.Body !== undefined) settings.Body = String(req.body.Body)
+      if (req.body.ActionLabel !== undefined) settings.ActionLabel = String(req.body.ActionLabel)
+      if (req.body.ActionUrl !== undefined) settings.ActionUrl = String(req.body.ActionUrl)
+      if (req.body.IsActive !== undefined) {
+        settings.IsActive = req.body.IsActive === true || req.body.IsActive === 'true'
+      }
+      await settings.save()
+    }
+
+    return res.json({
+      message: "Popup template saved successfully",
+      data: {
+        Title: settings.Title,
+        Body: settings.Body,
+        ImageUrl: settings.ImageUrl,
+        ActionLabel: settings.ActionLabel,
+        ActionUrl: settings.ActionUrl,
+        IsActive: settings.IsActive
+      }
+    })
+  } catch (err) {
+    console.error('Admin Save Popup Template - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.put('/popup-template', verifyAdminToken, popupUpload.single('image'), async (req, res) => {
+  try {
+    let settings = await popupTemplateSettingsModel.getSettings()
+    if (!settings) {
+      const fileName = req.file?.originalname || req.body.fileName || `popup-${Date.now()}.jpg`
+      let imageUrl = null
+      if (req.file) {
+        imageUrl = await uploadToS3(req.file.buffer, fileName, 'popup-templates', req.file.mimetype)
+      } else if (req.body.imageBase64) {
+        imageUrl = await uploadBase64ToS3(req.body.imageBase64, fileName, 'popup-templates')
+      } else if (req.body.ImageUrl) {
+        imageUrl = String(req.body.ImageUrl).trim()
+      }
+      if (!imageUrl) {
+        return res.status(400).json({
+          message: "No existing popup template. Use POST with an image, or PUT with multipart \"image\", \"imageBase64\", or \"ImageUrl\" to create one."
+        })
+      }
+      settings = await popupTemplateSettingsModel.create({
+        Title: req.body.Title != null ? String(req.body.Title) : '',
+        Body: req.body.Body != null ? String(req.body.Body) : '',
+        ImageUrl: imageUrl,
+        ActionLabel: req.body.ActionLabel != null ? String(req.body.ActionLabel) : '',
+        ActionUrl: req.body.ActionUrl != null ? String(req.body.ActionUrl) : '',
+        IsActive: req.body.IsActive === true || req.body.IsActive === 'true'
+      })
+      return res.json({
+        message: "Popup template created successfully",
+        data: {
+          Title: settings.Title,
+          Body: settings.Body,
+          ImageUrl: settings.ImageUrl,
+          ActionLabel: settings.ActionLabel,
+          ActionUrl: settings.ActionUrl,
+          IsActive: settings.IsActive
+        }
+      })
+    }
+    const prevImage = settings.ImageUrl
+
+    if (req.file) {
+      const fileName = req.file.originalname || `popup-${Date.now()}.jpg`
+      const imageUrl = await uploadToS3(req.file.buffer, fileName, 'popup-templates', req.file.mimetype)
+      if (prevImage && prevImage !== imageUrl) {
+        await tryDeleteOldPopupImage(prevImage)
+      }
+      settings.ImageUrl = imageUrl
+    } else if (req.body.imageBase64) {
+      const fileName = req.body.fileName || `popup-${Date.now()}.jpg`
+      const imageUrl = await uploadBase64ToS3(req.body.imageBase64, fileName, 'popup-templates')
+      if (prevImage && prevImage !== imageUrl) {
+        await tryDeleteOldPopupImage(prevImage)
+      }
+      settings.ImageUrl = imageUrl
+    } else if (req.body.ImageUrl !== undefined) {
+      const v = req.body.ImageUrl
+      if (v === null || v === '') {
+        settings.ImageUrl = null
+      } else {
+        settings.ImageUrl = String(v).trim()
+      }
+    }
+
+    if (req.body.Title !== undefined) settings.Title = String(req.body.Title)
+    if (req.body.Body !== undefined) settings.Body = String(req.body.Body)
+    if (req.body.ActionLabel !== undefined) settings.ActionLabel = String(req.body.ActionLabel)
+    if (req.body.ActionUrl !== undefined) settings.ActionUrl = String(req.body.ActionUrl)
+    if (req.body.IsActive !== undefined) {
+      settings.IsActive = req.body.IsActive === true || req.body.IsActive === 'true'
+    }
+
+    await settings.save()
+
+    return res.json({
+      message: "Popup template updated successfully",
+      data: {
+        Title: settings.Title,
+        Body: settings.Body,
+        ImageUrl: settings.ImageUrl,
+        ActionLabel: settings.ActionLabel,
+        ActionUrl: settings.ActionUrl,
+        IsActive: settings.IsActive
+      }
+    })
+  } catch (err) {
+    console.error('Admin Update Popup Template - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message

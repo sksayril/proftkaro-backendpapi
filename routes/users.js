@@ -48,6 +48,7 @@ let supportLinkSettingsModel = require('../models/supportLinkSettings.model')
 let socialLinksSettingsModel = require('../models/socialLinksSettings.model')
 let taskControlSettingsModel = require('../models/taskControlSettings.model')
 let adsManagementSettingsModel = require('../models/adsManagementSettings.model')
+let popupTemplateSettingsModel = require('../models/popupTemplateSettings.model')
 
 const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall', 'Quiz']
 
@@ -3390,6 +3391,49 @@ router.get('/social-links/public', async (req, res) => {
     })
   } catch (err) {
     console.error('Get Social Links (public) - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== POPUP TEMPLATE (PUBLIC) ====================
+
+router.get('/popup-template/public', async (req, res) => {
+  try {
+    const settings = await popupTemplateSettingsModel.getSettings()
+    if (!settings || !settings.IsActive || !settings.ImageUrl) {
+      return res.json({
+        message: "Popup template retrieved successfully",
+        data: {
+          isActive: false,
+          imageUrl: null,
+          title: null,
+          body: null,
+          actionLabel: null,
+          actionUrl: null,
+          note: !settings
+            ? "Popup is not configured"
+            : settings.IsActive
+              ? "Popup image is not configured"
+              : "Popup is currently disabled"
+        }
+      })
+    }
+    return res.json({
+      message: "Popup template retrieved successfully",
+      data: {
+        isActive: true,
+        imageUrl: settings.ImageUrl,
+        title: settings.Title || null,
+        body: settings.Body || null,
+        actionLabel: settings.ActionLabel || null,
+        actionUrl: settings.ActionUrl || null
+      }
+    })
+  } catch (err) {
+    console.error('Get Popup Template (public) - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
