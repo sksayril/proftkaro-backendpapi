@@ -2,20 +2,15 @@ var express = require('express');
 var router = express.Router();
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
-const { uploadToS3, uploadBase64ToS3, deleteFromS3 } = require('../utilities/s3Upload');
 
-const popupUploadStorage = multer.memoryStorage();
-const popupUpload = multer({
-  storage: popupUploadStorage,
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true)
-    } else {
-      cb(new Error('Only image files are allowed'), false)
-    }
+/** Multipart forms without files (e.g. admin UI after removing file inputs) still need multer to populate req.body. */
+function parseMultipartTextFieldsOnly(req, res, next) {
+  const ct = (req.headers['content-type'] || '').toLowerCase()
+  if (!ct.includes('multipart/form-data')) {
+    return next()
   }
-})
+  return multer().none()(req, res, next)
+}
 const { encryptPassword, decryptPassword } = require('../utilities/crypto');
 
 let adminModel = require('../models/admin.model')
@@ -34,6 +29,7 @@ let scratchCardClaimModel = require('../models/scratchCardClaim.model')
 let scratchCardDailyLimitSettingsModel = require('../models/scratchCardDailyLimitSettings.model')
 let scratchCardDailyLimitClaimModel = require('../models/scratchCardDailyLimitClaim.model')
 let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
+let giftVoucherRequestModel = require('../models/giftVoucherRequest.model')
 let signupBonusSettingsModel = require('../models/signupBonusSettings.model')
 let commissionSlabSettingsModel = require('../models/commissionSlabSettings.model')
 let captchaSolveModel = require('../models/captchaSolve.model')
@@ -45,20 +41,11 @@ let taskControlSettingsModel = require('../models/taskControlSettings.model')
 let adsManagementSettingsModel = require('../models/adsManagementSettings.model')
 let popupTemplateSettingsModel = require('../models/popupTemplateSettings.model')
 
-const S3_BUCKET = process.env.AWS_S3_BUCKET || 'streaming-bucket-123'
-
-function isOurS3ImageUrl(url) {
-  if (!url || typeof url !== 'string') return false
-  return url.includes(S3_BUCKET) && url.includes('.amazonaws.com')
-}
-
-async function tryDeleteOldPopupImage(url) {
-  if (!isOurS3ImageUrl(url)) return
-  try {
-    await deleteFromS3(url)
-  } catch (e) {
-    console.warn('Popup template: could not delete old S3 object:', e.message)
-  }
+function popupDescriptionFromDoc(doc) {
+  if (!doc) return ''
+  const d = doc.Description != null ? String(doc.Description).trim() : ''
+  if (d) return d
+  return doc.Body != null ? String(doc.Body).trim() : ''
 }
 
 const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall', 'Quiz']
@@ -728,6 +715,210 @@ router.post('/withdrawal/requests/bulk-status', verifyToken, async (req, res) =>
     })
   } catch (err) {
     console.error('Bulk Update Withdrawal Requests - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// ==================== Gift Voucher Requests (Admin) ====================
+
+router.get('/gift-voucher/requests', verifyToken, async (req, res) => {
+  try {
+    const { status } = req.query
+    let query = {}
+    if (status && ['Pending', 'Approved', 'Rejected', 'Delivered'].includes(status)) {
+      query.Status = status
+    }
+
+    const rows = await giftVoucherRequestModel.find(query)
+      .populate('UserId', 'MobileNumber DeviceId')
+      .sort({ createdAt: -1 })
+
+    const requests = rows.map((row) => ({
+      requestId: row._id,
+      userId: row.UserId ? row.UserId._id : null,
+      userMobileNumber: row.UserId ? row.UserId.MobileNumber : null,
+      userDeviceId: row.UserId ? row.UserId.DeviceId : null,
+      type: 'giftcard',
+      brand: row.Brand,
+      amount: row.Amount,
+      status: row.Status,
+      voucherCode: row.VoucherCode || null,
+      adminNotes: row.AdminNotes,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt
+    }))
+
+    const pendingCount = requests.filter((r) => r.status === 'Pending').length
+    const approvedCount = requests.filter((r) => r.status === 'Approved').length
+    const rejectedCount = requests.filter((r) => r.status === 'Rejected').length
+    const deliveredCount = requests.filter((r) => r.status === 'Delivered').length
+
+    return res.json({
+      message: "Gift voucher requests retrieved successfully",
+      data: {
+        requests,
+        totalRequests: requests.length,
+        pendingCount,
+        approvedCount,
+        rejectedCount,
+        deliveredCount
+      }
+    })
+  } catch (err) {
+    console.error('Get gift voucher requests - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.post('/gift-voucher/request/:requestId/approve', verifyToken, async (req, res) => {
+  try {
+    const { requestId } = req.params
+    const { adminNotes } = req.body
+
+    const doc = await giftVoucherRequestModel.findById(requestId).populate('UserId')
+    if (!doc) {
+      return res.status(404).json({ message: "Gift voucher request not found" })
+    }
+    if (doc.Status !== 'Pending') {
+      return res.status(400).json({
+        message: `This gift voucher request is already ${doc.Status.toLowerCase()}`
+      })
+    }
+
+    doc.Status = 'Approved'
+    if (adminNotes !== undefined && adminNotes !== null) {
+      doc.AdminNotes = adminNotes
+    }
+    await doc.save()
+
+    const user = await userModel.findById(doc.UserId._id || doc.UserId)
+
+    return res.json({
+      message: "Gift voucher request approved successfully",
+      data: {
+        requestId: doc._id,
+        type: 'giftcard',
+        brand: doc.Brand,
+        amount: doc.Amount,
+        status: doc.Status,
+        adminNotes: doc.AdminNotes,
+        userWalletBalance: user ? user.WalletBalance : null,
+        updatedAt: doc.updatedAt
+      }
+    })
+  } catch (err) {
+    console.error('Approve gift voucher - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.post('/gift-voucher/request/:requestId/reject', verifyToken, async (req, res) => {
+  try {
+    const { requestId } = req.params
+    const { adminNotes } = req.body
+
+    const doc = await giftVoucherRequestModel.findById(requestId).populate('UserId')
+    if (!doc) {
+      return res.status(404).json({ message: "Gift voucher request not found" })
+    }
+    if (doc.Status !== 'Pending') {
+      return res.status(400).json({
+        message: `This gift voucher request is already ${doc.Status.toLowerCase()}`
+      })
+    }
+
+    const user = await userModel.findById(doc.UserId._id || doc.UserId)
+    if (!user) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    doc.Status = 'Rejected'
+    if (adminNotes !== undefined && adminNotes !== null) {
+      doc.AdminNotes = adminNotes
+    }
+    await doc.save()
+
+    user.WalletBalance = (user.WalletBalance || 0) + doc.Amount
+    await user.save()
+
+    return res.json({
+      message: "Gift voucher request rejected successfully",
+      data: {
+        requestId: doc._id,
+        type: 'giftcard',
+        brand: doc.Brand,
+        amount: doc.Amount,
+        status: doc.Status,
+        adminNotes: doc.AdminNotes,
+        userWalletBalance: user.WalletBalance,
+        updatedAt: doc.updatedAt
+      }
+    })
+  } catch (err) {
+    console.error('Reject gift voucher - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.post('/gift-voucher/request/:requestId/deliver', verifyToken, async (req, res) => {
+  try {
+    const { requestId } = req.params
+    let { voucherCode, adminNotes } = req.body
+
+    if (voucherCode === undefined || voucherCode === null || String(voucherCode).trim() === '') {
+      return res.status(400).json({
+        message: "voucherCode is required to deliver the gift voucher"
+      })
+    }
+    voucherCode = String(voucherCode).trim()
+
+    const doc = await giftVoucherRequestModel.findById(requestId).populate('UserId')
+    if (!doc) {
+      return res.status(404).json({ message: "Gift voucher request not found" })
+    }
+    if (doc.Status !== 'Approved') {
+      return res.status(400).json({
+        message: "Voucher code can only be delivered after the request is approved (current status must be Approved)"
+      })
+    }
+
+    doc.VoucherCode = voucherCode
+    doc.Status = 'Delivered'
+    if (adminNotes !== undefined && adminNotes !== null) {
+      doc.AdminNotes = adminNotes
+    }
+    await doc.save()
+
+    const user = await userModel.findById(doc.UserId._id || doc.UserId)
+
+    return res.json({
+      message: "Gift voucher code delivered successfully",
+      data: {
+        requestId: doc._id,
+        type: 'giftcard',
+        brand: doc.Brand,
+        amount: doc.Amount,
+        status: doc.Status,
+        voucherCode: doc.VoucherCode,
+        adminNotes: doc.AdminNotes,
+        userWalletBalance: user ? user.WalletBalance : null,
+        updatedAt: doc.updatedAt
+      }
+    })
+  } catch (err) {
+    console.error('Deliver gift voucher - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
@@ -3931,10 +4122,7 @@ router.get('/popup-template', verifyAdminToken, async (req, res) => {
         message: "Popup template retrieved successfully",
         data: {
           Title: '',
-          Body: '',
-          ImageUrl: null,
-          ActionLabel: '',
-          ActionUrl: '',
+          Description: '',
           IsActive: false,
           note: "No popup template saved yet"
         }
@@ -3945,10 +4133,7 @@ router.get('/popup-template', verifyAdminToken, async (req, res) => {
       data: {
         _id: settings._id,
         Title: settings.Title,
-        Body: settings.Body,
-        ImageUrl: settings.ImageUrl,
-        ActionLabel: settings.ActionLabel,
-        ActionUrl: settings.ActionUrl,
+        Description: popupDescriptionFromDoc(settings),
         IsActive: settings.IsActive,
         createdAt: settings.createdAt,
         updatedAt: settings.updatedAt
@@ -3963,48 +4148,26 @@ router.get('/popup-template', verifyAdminToken, async (req, res) => {
   }
 })
 
-router.post('/popup-template', verifyAdminToken, popupUpload.single('image'), async (req, res) => {
+router.post('/popup-template', verifyAdminToken, parseMultipartTextFieldsOnly, async (req, res) => {
   try {
     let settings = await popupTemplateSettingsModel.findOne()
-    const prevImage = settings?.ImageUrl
-
-    let imageUrl = settings?.ImageUrl || null
-    if (req.file) {
-      const fileName = req.file.originalname || `popup-${Date.now()}.jpg`
-      imageUrl = await uploadToS3(req.file.buffer, fileName, 'popup-templates', req.file.mimetype)
-      if (prevImage && prevImage !== imageUrl) {
-        await tryDeleteOldPopupImage(prevImage)
-      }
-    } else if (req.body.imageBase64) {
-      const fileName = req.body.fileName || `popup-${Date.now()}.jpg`
-      imageUrl = await uploadBase64ToS3(req.body.imageBase64, fileName, 'popup-templates')
-      if (prevImage && prevImage !== imageUrl) {
-        await tryDeleteOldPopupImage(prevImage)
-      }
-    } else if (req.body.ImageUrl !== undefined && req.body.ImageUrl !== null && req.body.ImageUrl !== '') {
-      imageUrl = String(req.body.ImageUrl).trim()
-    }
+    const descInput = req.body.Description !== undefined
+      ? req.body.Description
+      : (req.body.Body !== undefined ? req.body.Body : undefined)
 
     if (!settings) {
-      if (!imageUrl) {
-        return res.status(400).json({
-          message: "Image is required for the first save. Send multipart field \"image\", or JSON \"imageBase64\", or \"ImageUrl\"."
-        })
-      }
       settings = await popupTemplateSettingsModel.create({
         Title: req.body.Title != null ? String(req.body.Title) : '',
-        Body: req.body.Body != null ? String(req.body.Body) : '',
-        ImageUrl: imageUrl,
-        ActionLabel: req.body.ActionLabel != null ? String(req.body.ActionLabel) : '',
-        ActionUrl: req.body.ActionUrl != null ? String(req.body.ActionUrl) : '',
+        Description: descInput !== undefined ? String(descInput) : '',
+        Body: '',
         IsActive: req.body.IsActive === true || req.body.IsActive === 'true'
       })
     } else {
-      if (imageUrl) settings.ImageUrl = imageUrl
       if (req.body.Title !== undefined) settings.Title = String(req.body.Title)
-      if (req.body.Body !== undefined) settings.Body = String(req.body.Body)
-      if (req.body.ActionLabel !== undefined) settings.ActionLabel = String(req.body.ActionLabel)
-      if (req.body.ActionUrl !== undefined) settings.ActionUrl = String(req.body.ActionUrl)
+      if (descInput !== undefined) {
+        settings.Description = String(descInput)
+        settings.Body = ''
+      }
       if (req.body.IsActive !== undefined) {
         settings.IsActive = req.body.IsActive === true || req.body.IsActive === 'true'
       }
@@ -4015,10 +4178,7 @@ router.post('/popup-template', verifyAdminToken, popupUpload.single('image'), as
       message: "Popup template saved successfully",
       data: {
         Title: settings.Title,
-        Body: settings.Body,
-        ImageUrl: settings.ImageUrl,
-        ActionLabel: settings.ActionLabel,
-        ActionUrl: settings.ActionUrl,
+        Description: popupDescriptionFromDoc(settings),
         IsActive: settings.IsActive
       }
     })
@@ -4031,73 +4191,35 @@ router.post('/popup-template', verifyAdminToken, popupUpload.single('image'), as
   }
 })
 
-router.put('/popup-template', verifyAdminToken, popupUpload.single('image'), async (req, res) => {
+router.put('/popup-template', verifyAdminToken, parseMultipartTextFieldsOnly, async (req, res) => {
   try {
     let settings = await popupTemplateSettingsModel.getSettings()
+    const descInput = req.body.Description !== undefined
+      ? req.body.Description
+      : (req.body.Body !== undefined ? req.body.Body : undefined)
+
     if (!settings) {
-      const fileName = req.file?.originalname || req.body.fileName || `popup-${Date.now()}.jpg`
-      let imageUrl = null
-      if (req.file) {
-        imageUrl = await uploadToS3(req.file.buffer, fileName, 'popup-templates', req.file.mimetype)
-      } else if (req.body.imageBase64) {
-        imageUrl = await uploadBase64ToS3(req.body.imageBase64, fileName, 'popup-templates')
-      } else if (req.body.ImageUrl) {
-        imageUrl = String(req.body.ImageUrl).trim()
-      }
-      if (!imageUrl) {
-        return res.status(400).json({
-          message: "No existing popup template. Use POST with an image, or PUT with multipart \"image\", \"imageBase64\", or \"ImageUrl\" to create one."
-        })
-      }
       settings = await popupTemplateSettingsModel.create({
         Title: req.body.Title != null ? String(req.body.Title) : '',
-        Body: req.body.Body != null ? String(req.body.Body) : '',
-        ImageUrl: imageUrl,
-        ActionLabel: req.body.ActionLabel != null ? String(req.body.ActionLabel) : '',
-        ActionUrl: req.body.ActionUrl != null ? String(req.body.ActionUrl) : '',
+        Description: descInput !== undefined ? String(descInput) : '',
+        Body: '',
         IsActive: req.body.IsActive === true || req.body.IsActive === 'true'
       })
       return res.json({
         message: "Popup template created successfully",
         data: {
           Title: settings.Title,
-          Body: settings.Body,
-          ImageUrl: settings.ImageUrl,
-          ActionLabel: settings.ActionLabel,
-          ActionUrl: settings.ActionUrl,
+          Description: popupDescriptionFromDoc(settings),
           IsActive: settings.IsActive
         }
       })
     }
-    const prevImage = settings.ImageUrl
-
-    if (req.file) {
-      const fileName = req.file.originalname || `popup-${Date.now()}.jpg`
-      const imageUrl = await uploadToS3(req.file.buffer, fileName, 'popup-templates', req.file.mimetype)
-      if (prevImage && prevImage !== imageUrl) {
-        await tryDeleteOldPopupImage(prevImage)
-      }
-      settings.ImageUrl = imageUrl
-    } else if (req.body.imageBase64) {
-      const fileName = req.body.fileName || `popup-${Date.now()}.jpg`
-      const imageUrl = await uploadBase64ToS3(req.body.imageBase64, fileName, 'popup-templates')
-      if (prevImage && prevImage !== imageUrl) {
-        await tryDeleteOldPopupImage(prevImage)
-      }
-      settings.ImageUrl = imageUrl
-    } else if (req.body.ImageUrl !== undefined) {
-      const v = req.body.ImageUrl
-      if (v === null || v === '') {
-        settings.ImageUrl = null
-      } else {
-        settings.ImageUrl = String(v).trim()
-      }
-    }
 
     if (req.body.Title !== undefined) settings.Title = String(req.body.Title)
-    if (req.body.Body !== undefined) settings.Body = String(req.body.Body)
-    if (req.body.ActionLabel !== undefined) settings.ActionLabel = String(req.body.ActionLabel)
-    if (req.body.ActionUrl !== undefined) settings.ActionUrl = String(req.body.ActionUrl)
+    if (descInput !== undefined) {
+      settings.Description = String(descInput)
+      settings.Body = ''
+    }
     if (req.body.IsActive !== undefined) {
       settings.IsActive = req.body.IsActive === true || req.body.IsActive === 'true'
     }
@@ -4108,10 +4230,7 @@ router.put('/popup-template', verifyAdminToken, popupUpload.single('image'), asy
       message: "Popup template updated successfully",
       data: {
         Title: settings.Title,
-        Body: settings.Body,
-        ImageUrl: settings.ImageUrl,
-        ActionLabel: settings.ActionLabel,
-        ActionUrl: settings.ActionUrl,
+        Description: popupDescriptionFromDoc(settings),
         IsActive: settings.IsActive
       }
     })

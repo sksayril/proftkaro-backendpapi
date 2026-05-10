@@ -42,6 +42,7 @@ let scratchCardClaimModel = require('../models/scratchCardClaim.model')
 let scratchCardDailyLimitSettingsModel = require('../models/scratchCardDailyLimitSettings.model')
 let scratchCardDailyLimitClaimModel = require('../models/scratchCardDailyLimitClaim.model')
 let withdrawalSettingsModel = require('../models/withdrawalSettings.model')
+let giftVoucherRequestModel = require('../models/giftVoucherRequest.model')
 let signupBonusSettingsModel = require('../models/signupBonusSettings.model')
 let sponsorPromotionSubmissionModel = require('../models/sponsorPromotionSubmission.model')
 let supportLinkSettingsModel = require('../models/supportLinkSettings.model')
@@ -51,6 +52,29 @@ let adsManagementSettingsModel = require('../models/adsManagementSettings.model'
 let popupTemplateSettingsModel = require('../models/popupTemplateSettings.model')
 
 const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall', 'Quiz']
+
+const GIFT_VOUCHER_DENOMINATIONS = [50, 100, 250, 500, 1000]
+
+function getWithdrawalDayRange() {
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  const tomorrowStart = new Date(todayStart)
+  tomorrowStart.setDate(tomorrowStart.getDate() + 1)
+  return { todayStart, tomorrowStart }
+}
+
+async function countWithdrawalActionsToday(userId) {
+  const { todayStart, tomorrowStart } = getWithdrawalDayRange()
+  const cashCount = await withdrawalRequestModel.countDocuments({
+    UserId: userId,
+    createdAt: { $gte: todayStart, $lt: tomorrowStart }
+  })
+  const giftCount = await giftVoucherRequestModel.countDocuments({
+    UserId: userId,
+    createdAt: { $gte: todayStart, $lt: tomorrowStart }
+  })
+  return cashCount + giftCount
+}
 
 async function getTaskControl(taskType) {
   if (!CONTROLLED_TASK_TYPES.includes(taskType)) {
@@ -1467,15 +1491,8 @@ router.get('/withdrawal/threshold', verifyToken, async (req, res) => {
 
     // Get withdrawal settings
     let settings = await withdrawalSettingsModel.getSettings()
-    const todayStart = new Date()
-    todayStart.setHours(0, 0, 0, 0)
-    const tomorrowStart = new Date(todayStart)
-    tomorrowStart.setDate(tomorrowStart.getDate() + 1)
 
-    const requestsToday = await withdrawalRequestModel.countDocuments({
-      UserId: userId,
-      createdAt: { $gte: todayStart, $lt: tomorrowStart }
-    })
+    const requestsToday = await countWithdrawalActionsToday(userId)
 
     return res.json({
       message: "Withdrawal threshold retrieved successfully",
@@ -1558,16 +1575,8 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
       }
     }
 
-    // Check daily withdrawal request count limit
-    const todayStart = new Date()
-    todayStart.setHours(0, 0, 0, 0)
-    const tomorrowStart = new Date(todayStart)
-    tomorrowStart.setDate(tomorrowStart.getDate() + 1)
-
-    const requestsToday = await withdrawalRequestModel.countDocuments({
-      UserId: userId,
-      createdAt: { $gte: todayStart, $lt: tomorrowStart }
-    })
+    // Check daily withdrawal request count limit (UPI/Bank + gift voucher share the same daily cap)
+    const requestsToday = await countWithdrawalActionsToday(userId)
 
     const dailyLimit = withdrawalSettings.DailyWithdrawalRequestLimit || 1
     if (requestsToday >= dailyLimit) {
@@ -1663,6 +1672,157 @@ router.get('/withdrawal/requests', verifyToken, async (req, res) => {
 
   } catch (err) {
     console.error('Get Withdrawal Requests - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+// Gift voucher redeem — brands, amounts, daily quota (shared with UPI/Bank withdrawal limit)
+router.get('/gift-voucher/options', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({ message: "User Not Found" })
+    }
+    const settings = await withdrawalSettingsModel.getSettings()
+    const requestsToday = await countWithdrawalActionsToday(userId)
+    const dailyLimit = settings.DailyWithdrawalRequestLimit || 1
+
+    return res.json({
+      message: "Gift voucher options retrieved successfully",
+      data: {
+        type: "giftcard",
+        brands: giftVoucherRequestModel.GIFT_VOUCHER_BRANDS,
+        denominations: GIFT_VOUCHER_DENOMINATIONS,
+        dailyWithdrawalRequestLimit: dailyLimit,
+        requestsToday,
+        remainingRequestsToday: Math.max(0, dailyLimit - requestsToday),
+        currentWalletBalance: user.WalletBalance || 0
+      }
+    })
+  } catch (err) {
+    console.error('Gift voucher options - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.post('/gift-voucher/request', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({ message: "User Not Found" })
+    }
+
+    const { Brand, Amount } = req.body
+    if (!Brand || !giftVoucherRequestModel.GIFT_VOUCHER_BRANDS.includes(Brand)) {
+      return res.status(400).json({
+        message: `Brand is required and must be one of: ${giftVoucherRequestModel.GIFT_VOUCHER_BRANDS.join(', ')}`
+      })
+    }
+    if (Amount == null || Number(Amount) <= 0) {
+      return res.status(400).json({
+        message: "Amount is required and must be greater than 0"
+      })
+    }
+    const amountNum = Number(Amount)
+    if (!GIFT_VOUCHER_DENOMINATIONS.includes(amountNum)) {
+      return res.status(400).json({
+        message: `Amount must be one of the allowed denominations: ${GIFT_VOUCHER_DENOMINATIONS.join(', ')}`
+      })
+    }
+
+    const withdrawalSettings = await withdrawalSettingsModel.getSettings()
+    const requestsToday = await countWithdrawalActionsToday(userId)
+    const dailyLimit = withdrawalSettings.DailyWithdrawalRequestLimit || 1
+    if (requestsToday >= dailyLimit) {
+      return res.status(400).json({
+        message: `Daily withdrawal request limit reached. You can place only ${dailyLimit} withdrawal request(s) per day (includes UPI, Bank, and gift vouchers).`
+      })
+    }
+
+    const currentWalletBalance = user.WalletBalance || 0
+    if (currentWalletBalance < amountNum) {
+      return res.status(400).json({
+        message: `Insufficient wallet balance. Available: ${currentWalletBalance}, Requested: ${amountNum}`
+      })
+    }
+
+    const giftRequest = await giftVoucherRequestModel.create({
+      UserId: userId,
+      Type: 'giftcard',
+      Brand,
+      Amount: amountNum,
+      Status: 'Pending'
+    })
+
+    user.WalletBalance = currentWalletBalance - amountNum
+    await user.save()
+
+    return res.json({
+      message: "Gift voucher request submitted successfully",
+      data: {
+        requestId: giftRequest._id,
+        userId: userId,
+        type: "giftcard",
+        brand: Brand,
+        amount: amountNum,
+        status: "Pending",
+        remainingWalletBalance: user.WalletBalance,
+        requestsToday: requestsToday + 1,
+        remainingRequestsToday: Math.max(0, dailyLimit - (requestsToday + 1)),
+        createdAt: giftRequest.createdAt
+      }
+    })
+  } catch (err) {
+    console.error('Gift voucher request - Error:', err)
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message
+    })
+  }
+})
+
+router.get('/gift-voucher/requests', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const user = await userModel.findById(userId)
+    if (!user) {
+      return res.status(404).json({ message: "User Not Found" })
+    }
+
+    const list = await giftVoucherRequestModel.find({ UserId: userId })
+      .sort({ createdAt: -1 })
+
+    const requests = list.map((r) => ({
+      requestId: r._id,
+      userId: r.UserId,
+      type: "giftcard",
+      brand: r.Brand,
+      amount: r.Amount,
+      status: r.Status,
+      voucherCode: r.Status === 'Delivered' && r.VoucherCode ? r.VoucherCode : null,
+      adminNotes: r.AdminNotes,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt
+    }))
+
+    return res.json({
+      message: "Gift voucher requests retrieved successfully",
+      data: {
+        requests,
+        totalRequests: requests.length,
+        currentWalletBalance: user.WalletBalance || 0
+      }
+    })
+  } catch (err) {
+    console.error('Get gift voucher requests - Error:', err)
     return res.status(500).json({
       message: "Internal Server Error",
       error: err.message
@@ -3400,36 +3560,47 @@ router.get('/social-links/public', async (req, res) => {
 
 // ==================== POPUP TEMPLATE (PUBLIC) ====================
 
+function popupPublicDescription(settings) {
+  if (!settings) return ''
+  const d = settings.Description != null ? String(settings.Description).trim() : ''
+  if (d) return d
+  return settings.Body != null ? String(settings.Body).trim() : ''
+}
+
+function popupTemplateHasDisplayContent(settings) {
+  if (!settings) return false
+  if (settings.Title && String(settings.Title).trim()) return true
+  const desc = popupPublicDescription(settings)
+  return !!(desc && String(desc).trim())
+}
+
 router.get('/popup-template/public', async (req, res) => {
   try {
     const settings = await popupTemplateSettingsModel.getSettings()
-    if (!settings || !settings.IsActive || !settings.ImageUrl) {
+    if (!settings || !settings.IsActive || !popupTemplateHasDisplayContent(settings)) {
       return res.json({
         message: "Popup template retrieved successfully",
         data: {
           isActive: false,
-          imageUrl: null,
           title: null,
-          body: null,
-          actionLabel: null,
-          actionUrl: null,
+          description: null,
           note: !settings
             ? "Popup is not configured"
-            : settings.IsActive
-              ? "Popup image is not configured"
-              : "Popup is currently disabled"
+            : !settings.IsActive
+              ? "Popup is currently disabled"
+              : "Popup has no title or description to display"
         }
       })
     }
+    const description = popupPublicDescription(settings)
     return res.json({
       message: "Popup template retrieved successfully",
       data: {
         isActive: true,
-        imageUrl: settings.ImageUrl,
-        title: settings.Title || null,
-        body: settings.Body || null,
-        actionLabel: settings.ActionLabel || null,
-        actionUrl: settings.ActionUrl || null
+        title: settings.Title && String(settings.Title).trim()
+          ? String(settings.Title).trim()
+          : null,
+        description: description ? description : null
       }
     })
   } catch (err) {

@@ -1641,6 +1641,7 @@ Content-Type: application/json
 - `minimumWithdrawalAmount`: The minimum amount required to make a withdrawal (set by admin)
 - `currentWalletBalance`: User's current wallet balance
 - `canWithdraw`: Boolean indicating if user has enough balance to withdraw (balance >= minimum)
+- The live API also returns `dailyWithdrawalRequestLimit`, `requestsToday`, and `remainingRequestsToday`. `requestsToday` counts **UPI, Bank, and gift-voucher** requests together for the daily cap.
 
 ### Error Responses
 
@@ -1809,6 +1810,157 @@ Authorization: Bearer <JWT_TOKEN>
 - Requests are sorted by creation date (newest first)
 - If request is rejected, amount is returned to wallet
 - If request is approved, amount stays deducted
+
+---
+
+## Gift Voucher (Gift Card Redeem) APIs
+
+Use these endpoints when the user selects **Gift Voucher Withdraw** on the withdrawal screen (instead of UPI or Bank). Amount is deducted from the wallet when the request is created; status starts as **Pending**. After admin **Deliver**, the user can read `voucherCode` from their list.
+
+**Brands (fixed list):** `Amazon`, `Flipkart`, `GooglePlay`, `Paytm` — send these exact strings as `Brand`.
+
+**Allowed amounts:** Server accepts only these denominations: **50, 100, 250, 500, 1000** (₹). Extend the list in backend if you add more slabs.
+
+**Daily limit:** The same `DailyWithdrawalRequestLimit` as UPI/Bank applies to **all** withdrawal actions combined (cash withdrawal + gift voucher requests) per calendar day.
+
+---
+
+### GET /users/gift-voucher/options
+
+Returns brands, allowed denominations, wallet balance, and how many withdrawal actions remain today.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Gift voucher options retrieved successfully",
+  "data": {
+    "type": "giftcard",
+    "brands": ["Amazon", "Flipkart", "GooglePlay", "Paytm"],
+    "denominations": [50, 100, 250, 500, 1000],
+    "dailyWithdrawalRequestLimit": 1,
+    "requestsToday": 0,
+    "remainingRequestsToday": 1,
+    "currentWalletBalance": 500
+  }
+}
+```
+
+**Response (Error - 404):**
+```json
+{
+  "message": "User Not Found"
+}
+```
+
+---
+
+### POST /users/gift-voucher/request
+
+Submit a gift voucher redeem request. Wallet balance is reduced immediately; record is stored with `status: "Pending"`.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "Brand": "Amazon",
+  "Amount": 100
+}
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Gift voucher request submitted successfully",
+  "data": {
+    "requestId": "60f7b3b3b3b3b3b3b3b3b3b3",
+    "userId": "60f7b3b3b3b3b3b3b3b3b3b1",
+    "type": "giftcard",
+    "brand": "Amazon",
+    "amount": 100,
+    "status": "Pending",
+    "remainingWalletBalance": 400,
+    "requestsToday": 1,
+    "remainingRequestsToday": 0,
+    "createdAt": "2024-01-18T22:00:00.000Z"
+  }
+}
+```
+
+**Response (Error - 400) — invalid brand:**
+```json
+{
+  "message": "Brand is required and must be one of: Amazon, Flipkart, GooglePlay, Paytm"
+}
+```
+
+**Response (Error - 400) — bad denomination:**
+```json
+{
+  "message": "Amount must be one of the allowed denominations: 50, 100, 250, 500, 1000"
+}
+```
+
+**Response (Error - 400) — daily limit:**
+```json
+{
+  "message": "Daily withdrawal request limit reached. You can place only 1 withdrawal request(s) per day (includes UPI, Bank, and gift vouchers)."
+}
+```
+
+**Response (Error - 400) — insufficient balance:**
+```json
+{
+  "message": "Insufficient wallet balance. Available: 50, Requested: 100"
+}
+```
+
+---
+
+### GET /users/gift-voucher/requests
+
+List the authenticated user’s gift voucher requests. `voucherCode` is **only** included when `status` is `Delivered`.
+
+**Headers:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (Success - 200):**
+```json
+{
+  "message": "Gift voucher requests retrieved successfully",
+  "data": {
+    "requests": [
+      {
+        "requestId": "60f7b3b3b3b3b3b3b3b3b3b3",
+        "userId": "60f7b3b3b3b3b3b3b3b3b3b1",
+        "type": "giftcard",
+        "brand": "Amazon",
+        "amount": 100,
+        "status": "Delivered",
+        "voucherCode": "ABCD-EFGH-IJKL",
+        "adminNotes": null,
+        "createdAt": "2024-01-18T22:00:00.000Z",
+        "updatedAt": "2024-01-18T23:00:00.000Z"
+      }
+    ],
+    "totalRequests": 1,
+    "currentWalletBalance": 400
+  }
+}
+```
+
+For `Pending`, `Approved`, or `Rejected`, `voucherCode` will be `null`.
 
 ---
 
@@ -4341,16 +4493,13 @@ These jobs run automatically when the server starts and require no manual interv
 
 ## Popup template (public)
 
-Home-screen or promotional popup image and copy are configured by admin. The image file is stored on **AWS S3**; **MongoDB** stores the public `imageUrl` and text fields. Admin creates and edits the template via **`/admin/popup-template`** (see `admin.md`).
+Promotional popup text is configured by admin (**`GET`/`POST`/`PUT /admin/popup-template`**, see **`admin.md`**). The public endpoint returns only **`title`**, **`description`**, and **`isActive`** (no banner image, links, or CTA).
 
 ### GET /users/popup-template/public
 
-**No authentication required.** Returns popup data only when `IsActive` is true and an `ImageUrl` is set in the database.
+**No authentication.** Returns **`isActive: true`** with **`title`** and **`description`** only when **`IsActive`** is true and at least one of **title** or **description** is non-empty (**description** merges legacy **`Body`** until admins save **`Description`**). Otherwise **`isActive: false`**, **`title`** / **`description`** are **`null`**, plus **`note`**.
 
-**Endpoint:**
-```
-GET http://localhost:3100/users/popup-template/public
-```
+
 
 **Response (active popup, 200):**
 ```json
@@ -4358,43 +4507,37 @@ GET http://localhost:3100/users/popup-template/public
   "message": "Popup template retrieved successfully",
   "data": {
     "isActive": true,
-    "imageUrl": "https://streaming-bucket-123.s3.us-east-1.amazonaws.com/popup-templates/1710000000000-banner.png",
     "title": "Limited time",
-    "body": "Complete tasks to earn more",
-    "actionLabel": "OK",
-    "actionUrl": "https://example.com/offer"
+    "description": "Complete tasks to earn more"
   }
 }
 ```
 
-**Response (inactive or missing image, 200):**
+**Response (inactive / empty / disabled, 200):**
 ```json
 {
   "message": "Popup template retrieved successfully",
   "data": {
     "isActive": false,
-    "imageUrl": null,
     "title": null,
-    "body": null,
-    "actionLabel": null,
-    "actionUrl": null,
+    "description": null,
     "note": "Popup is currently disabled"
   }
 }
 ```
+
+Possible **`note`** values: **`Popup is not configured`**, **`Popup is currently disabled`**, **`Popup has no title or description to display`**.
 
 **Example (fetch in app):**
 ```javascript
 fetch('http://localhost:3100/users/popup-template/public')
   .then(r => r.json())
   .then(({ data }) => {
-    if (data.isActive && data.imageUrl) {
-      // show popup with data.imageUrl, data.title, etc.
+    if (data.isActive && (data.title || data.description)) {
+      // Render data.title, data.description only
     }
   });
 ```
-
-**Environment:** Same S3 bucket and region as other uploads (`AWS_S3_BUCKET`, `AWS_REGION`). MongoDB connection uses your existing `MONGODB_URI` (or project env) as for all other models.
 
 ---
 

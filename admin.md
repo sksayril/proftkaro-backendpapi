@@ -3898,11 +3898,15 @@ Now returns both:
 
 ## Popup template (admin)
 
-Popup promotional image and text are stored in MongoDB (`ImageUrl` points to AWS S3). The mobile app can load the public user API `GET /users/popup-template/public` (no auth).
+Single promotional popup configured in MongoDB: **`Title`**, **`Description`**, **`IsActive`**. No images, banners, action buttons, or external URLs—the public app only reads **`title`** and **`description`**.
+
+Older clients could send **`Body`** instead of **`Description`** once; **`Description`** is what you should use.
+
+The mobile app loads **`GET /users/popup-template/public`** (no auth).
 
 ### GET /admin/popup-template
 
-Returns the current popup template document (including S3 `ImageUrl`).
+Returns the stored template (`Description` merges legacy **`Body`** for display until an admin saves with **`Description`**).
 
 **Headers:**
 ```
@@ -3916,10 +3920,7 @@ Authorization: Bearer <JWT_TOKEN>
   "data": {
     "_id": "...",
     "Title": "New offer",
-    "Body": "Tap to learn more",
-    "ImageUrl": "https://streaming-bucket-123.s3.us-east-1.amazonaws.com/popup-templates/123-banner.png",
-    "ActionLabel": "Open",
-    "ActionUrl": "https://example.com",
+    "Description": "Short message shown in the popup.",
     "IsActive": true,
     "createdAt": "...",
     "updatedAt": "..."
@@ -3927,23 +3928,26 @@ Authorization: Bearer <JWT_TOKEN>
 }
 ```
 
+If no document exists yet, the API still returns success with empty defaults and **`"note": "No popup template saved yet"`**.
+
 ### POST /admin/popup-template
 
-Create or update the single popup template. On first save, an image is required: multipart field `image`, or JSON field `imageBase64` (optional `fileName`), or `ImageUrl` string.
+Create or update the **single** saved template (create fills missing strings with empty values; updates only change **`Title`**, **`Description`** / **`Body`**, **`IsActive`** when those keys are present).
 
 **Headers:** `Authorization: Bearer <JWT_TOKEN>`  
-**Content-Type:** `multipart/form-data` (with `image` file) **or** `application/json` (with `imageBase64` / `ImageUrl`).
+**Content-Type:** **`application/json`** or **`multipart/form-data`** without files.
 
-**JSON body fields (all optional except image on first create):**
-- `Title`, `Body`, `ActionLabel`, `ActionUrl`
-- `IsActive` (boolean)
-- `imageBase64`, `fileName`
-- `ImageUrl` (external URL; stored as-is)
+**Fields:**
+- **`Title`** (string)
+- **`Description`** (string)—main popup copy
+- **`IsActive`** (boolean or **`"true"`** / **`"false"`**)
 
-When a new image is uploaded to S3, the previous image is deleted from S3 if it belonged to the configured bucket.
+Optional alias: **`Body`** maps to **`Description`** if **`Description`** is omitted.
+
+Ignored if present (legacy / unused): **`image`**, **`imageBase64`**, **`ImageUrl`**, **`ActionLabel`**, **`ActionUrl`**.
 
 ### PUT /admin/popup-template
 
-Partial update. Same image options as POST (`image` file, `imageBase64`, or `ImageUrl`). Text fields are updated only when present in the body. Set `ImageUrl` to `null` or `""` to clear the stored URL (admin should upload a new image before enabling the popup again).
+Creates the template if missing; otherwise updates only the fields supplied (partial update).
 
-**Multipart example:** field `image` (file) plus optional text fields as form fields.
+**Example:** `{ "Description": "Updated copy", "IsActive": true }`

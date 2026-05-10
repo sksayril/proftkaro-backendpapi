@@ -6,22 +6,14 @@ let schema = new mongoose.Schema({
     default: '',
     trim: true
   },
+  /** Main message body for the popup. */
+  Description: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  /** @deprecated Stored only so older documents can still be read until re-saved via admin. Cleared on new saves. */
   Body: {
-    type: String,
-    default: '',
-    trim: true
-  },
-  ImageUrl: {
-    type: String,
-    default: null,
-    trim: true
-  },
-  ActionLabel: {
-    type: String,
-    default: '',
-    trim: true
-  },
-  ActionUrl: {
     type: String,
     default: '',
     trim: true
@@ -34,7 +26,7 @@ let schema = new mongoose.Schema({
   timestamps: true
 })
 
-/** Single template row; created only when admin saves an image (no auto-insert). */
+/** Single template row; created when admin saves (no auto-insert). */
 schema.statics.getSettings = async function () {
   return this.findOne()
 }
