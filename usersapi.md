@@ -1631,6 +1631,7 @@ Content-Type: application/json
   "message": "Withdrawal threshold retrieved successfully",
   "data": {
     "minimumWithdrawalAmount": 500,
+    "denominations": [10, 20, 30, 50],
     "currentWalletBalance": 300,
     "canWithdraw": false
   }
@@ -1639,6 +1640,7 @@ Content-Type: application/json
 
 **Note:** 
 - `minimumWithdrawalAmount`: The minimum amount required to make a withdrawal (set by admin)
+- `denominations`: Array of allowed withdrawal amounts `[10, 20, 30, 50]`. Users must pick one of these values.
 - `currentWalletBalance`: User's current wallet balance
 - `canWithdraw`: Boolean indicating if user has enough balance to withdraw (balance >= minimum)
 - The live API also returns `dailyWithdrawalRequestLimit`, `requestsToday`, and `remainingRequestsToday`. `requestsToday` counts **UPI, Bank, and gift-voucher** requests together for the daily cap.
@@ -1687,7 +1689,7 @@ Authorization: Bearer <JWT_TOKEN>
 **Request Body:**
 ```json
 {
-  "Amount": 100,
+  "Amount": 10,
   "PaymentMethod": "UPI",
   "UPIId": "user@upi",
   "VirtualId": "VIRTUAL123"
@@ -1697,7 +1699,7 @@ Authorization: Bearer <JWT_TOKEN>
 OR for Bank Transfer:
 ```json
 {
-  "Amount": 500,
+  "Amount": 50,
   "PaymentMethod": "BankTransfer",
   "BankAccountNumber": "1234567890",
   "BankIFSC": "BANK0001234",
@@ -1706,13 +1708,15 @@ OR for Bank Transfer:
 }
 ```
 
+**Allowed Denominations:** `10, 20, 30, 50` — Amount must be one of these values.
+
 **Response (Success - 200):**
 ```json
 {
   "message": "Withdrawal request submitted successfully",
   "data": {
     "requestId": "60f7b3b3b3b3b3b3b3b3b3b3",
-    "amount": 100,
+    "amount": 10,
     "paymentMethod": "UPI",
     "status": "Pending",
     "remainingWalletBalance": 400,
@@ -1721,36 +1725,34 @@ OR for Bank Transfer:
 }
 ```
 
-**Response (Error - 400):**
+**Response (Error - 400 - Invalid Denomination):**
 ```json
 {
-  "message": "Minimum withdrawal amount is 500. You requested 100"
+  "message": "Amount must be one of the allowed denominations: 10, 20, 30, 50"
 }
 ```
 
 **Response (Error - 400):**
 ```json
 {
-  "message": "Insufficient wallet balance. Available: 50, Requested: 100"
+  "message": "Insufficient wallet balance. Available: 5, Requested: 10"
 }
 ```
 
 **Response (Error - 400):**
 ```json
 {
-  "message": "You have a pending withdrawal request. Please wait for it to be processed."
+  "message": "Daily withdrawal request limit reached. You can place only 1 withdrawal request(s) per day."
 }
 ```
 
 **Validation Rules:**
-- Amount must be greater than 0
-- Amount must meet the minimum withdrawal threshold (set by admin)
+- Amount must be one of the allowed denominations: `10, 20, 30, 50`
 - Wallet balance must be sufficient
-- Only one pending request allowed at a time
 - For UPI: UPIId or VirtualId is required
 - For Bank Transfer: BankAccountNumber, BankIFSC, BankName, and AccountHolderName are required
 - Amount is deducted from wallet immediately when request is submitted
-- Use `/users/withdrawal/threshold` endpoint to check minimum withdrawal amount before submitting request
+- Use `/users/withdrawal/threshold` endpoint to check available denominations before submitting request
 
 ---
 

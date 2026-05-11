@@ -53,7 +53,8 @@ let popupTemplateSettingsModel = require('../models/popupTemplateSettings.model'
 
 const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall', 'Quiz']
 
-const GIFT_VOUCHER_DENOMINATIONS = [50, 100, 250, 500, 1000]
+const GIFT_VOUCHER_DENOMINATIONS = [10, 20, 30, 50]
+const WITHDRAWAL_DENOMINATIONS = [10, 20, 30, 50]
 
 function getWithdrawalDayRange() {
   const todayStart = new Date()
@@ -1498,6 +1499,7 @@ router.get('/withdrawal/threshold', verifyToken, async (req, res) => {
       message: "Withdrawal threshold retrieved successfully",
       data: {
         minimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
+        denominations: WITHDRAWAL_DENOMINATIONS,
         dailyWithdrawalRequestLimit: settings.DailyWithdrawalRequestLimit,
         requestsToday: requestsToday,
         remainingRequestsToday: Math.max(0, settings.DailyWithdrawalRequestLimit - requestsToday),
@@ -1530,9 +1532,16 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
     const { Amount, PaymentMethod, UPIId, VirtualId, BankAccountNumber, BankIFSC, BankName, AccountHolderName } = req.body
 
     // Validate required fields
-    if (!Amount || Amount <= 0) {
+    if (Amount == null || Number(Amount) <= 0) {
       return res.status(400).json({
         message: "Amount is required and must be greater than 0"
+      })
+    }
+
+    const amountNum = Number(Amount)
+    if (!WITHDRAWAL_DENOMINATIONS.includes(amountNum)) {
+      return res.status(400).json({
+        message: `Amount must be one of the allowed denominations: ${WITHDRAWAL_DENOMINATIONS.join(', ')}`
       })
     }
 
@@ -1542,21 +1551,14 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
       })
     }
 
-    // Get withdrawal settings and validate minimum withdrawal amount
+    // Get withdrawal settings
     let withdrawalSettings = await withdrawalSettingsModel.getSettings()
-    const minimumWithdrawalAmount = withdrawalSettings.MinimumWithdrawalAmount || 100
-    
-    if (Amount < minimumWithdrawalAmount) {
-      return res.status(400).json({
-        message: `Minimum withdrawal amount is ${minimumWithdrawalAmount}. You requested ${Amount}`
-      })
-    }
 
     // Validate wallet balance
     const currentWalletBalance = user.WalletBalance || 0
-    if (currentWalletBalance < Amount) {
+    if (currentWalletBalance < amountNum) {
       return res.status(400).json({
-        message: `Insufficient wallet balance. Available: ${currentWalletBalance}, Requested: ${Amount}`
+        message: `Insufficient wallet balance. Available: ${currentWalletBalance}, Requested: ${amountNum}`
       })
     }
 
@@ -1588,7 +1590,7 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
     // Create withdrawal request
     const withdrawalRequest = await withdrawalRequestModel.create({
       UserId: userId,
-      Amount: Amount,
+      Amount: amountNum,
       PaymentMethod: PaymentMethod,
       UPIId: UPIId || null,
       VirtualId: VirtualId || null,
@@ -1600,7 +1602,7 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
     })
 
     // Deduct amount from wallet
-    user.WalletBalance = currentWalletBalance - Amount
+    user.WalletBalance = currentWalletBalance - amountNum
     await user.save()
 
     return res.json({
