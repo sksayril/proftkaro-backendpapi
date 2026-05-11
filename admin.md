@@ -2251,14 +2251,18 @@ Content-Type: application/json
 **Request Body:**
 ```json
 {
-  "MinimumWithdrawalAmount": 500
+  "MinimumWithdrawalAmount": 500,
+  "DailyWithdrawalRequestLimit": 1,
+  "WithdrawalDenominations": [10, 20, 30, 50]
 }
 ```
 
 **Note:**
-- `MinimumWithdrawalAmount`: The minimum amount users must have in their wallet to make a withdrawal request (must be >= 1)
+- `MinimumWithdrawalAmount` (required): The minimum amount users must have in their wallet to make a withdrawal request (must be >= 1)
+- `DailyWithdrawalRequestLimit` (optional): Must be 1 or 2. Limits total daily withdrawal actions (UPI + Bank + Gift Voucher).
+- `WithdrawalDenominations` (optional): Array of positive numbers. These are the fixed amounts users can choose when making a withdrawal request. Default: `[10, 20, 30, 50]`
 - This threshold is enforced when users submit withdrawal requests
-- Users cannot withdraw amounts below this threshold
+- Users can only withdraw one of the allowed denominations
 
 **Response (Success - 200):**
 ```json
@@ -2266,6 +2270,8 @@ Content-Type: application/json
   "message": "Withdrawal threshold updated successfully",
   "data": {
     "MinimumWithdrawalAmount": 500,
+    "DailyWithdrawalRequestLimit": 1,
+    "WithdrawalDenominations": [10, 20, 30, 50],
     "updatedAt": "2024-01-18T20:00:00.000Z"
   }
 }
@@ -2310,12 +2316,14 @@ Authorization: Bearer <JWT_TOKEN>
   "message": "Withdrawal threshold retrieved successfully",
   "data": {
     "MinimumWithdrawalAmount": 500,
+    "DailyWithdrawalRequestLimit": 1,
+    "WithdrawalDenominations": [10, 20, 30, 50],
     "updatedAt": "2024-01-18T20:00:00.000Z"
   }
 }
 ```
 
-**Note:** If no settings exist, default value will be created (MinimumWithdrawalAmount: 100)
+**Note:** If no settings exist, default values will be created (MinimumWithdrawalAmount: 100, DailyWithdrawalRequestLimit: 1, WithdrawalDenominations: [10, 20, 30, 50])
 
 ---
 

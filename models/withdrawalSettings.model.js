@@ -1,5 +1,7 @@
 let mongoose = require('mongoose')
 
+const DEFAULT_WITHDRAWAL_DENOMINATIONS = [10, 20, 30, 50]
+
 let schema = new mongoose.Schema({
     MinimumWithdrawalAmount: {
         type: Number,
@@ -12,6 +14,11 @@ let schema = new mongoose.Schema({
         required: true,
         default: 1,
         enum: [1, 2]
+    },
+    WithdrawalDenominations: {
+        type: [Number],
+        required: true,
+        default: DEFAULT_WITHDRAWAL_DENOMINATIONS
     }
 }, {
     timestamps: true
@@ -23,15 +30,24 @@ schema.statics.getSettings = async function() {
     if (!settings) {
         settings = await this.create({
             MinimumWithdrawalAmount: 100,
-            DailyWithdrawalRequestLimit: 1
+            DailyWithdrawalRequestLimit: 1,
+            WithdrawalDenominations: DEFAULT_WITHDRAWAL_DENOMINATIONS
         })
     }
+
+    let needsSave = false
 
     // backward compatibility for existing settings docs
     if (!settings.DailyWithdrawalRequestLimit || ![1, 2].includes(settings.DailyWithdrawalRequestLimit)) {
         settings.DailyWithdrawalRequestLimit = 1
-        await settings.save()
+        needsSave = true
     }
+    if (!settings.WithdrawalDenominations || settings.WithdrawalDenominations.length === 0) {
+        settings.WithdrawalDenominations = DEFAULT_WITHDRAWAL_DENOMINATIONS
+        needsSave = true
+    }
+
+    if (needsSave) await settings.save()
     return settings
 }
 

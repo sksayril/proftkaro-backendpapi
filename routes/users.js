@@ -54,7 +54,6 @@ let popupTemplateSettingsModel = require('../models/popupTemplateSettings.model'
 const CONTROLLED_TASK_TYPES = ['Captcha', 'DailySpin', 'ScratchCardDailyLimit', 'AppInstall', 'Quiz']
 
 const GIFT_VOUCHER_DENOMINATIONS = [10, 20, 30, 50]
-const WITHDRAWAL_DENOMINATIONS = [10, 20, 30, 50]
 
 function getWithdrawalDayRange() {
   const todayStart = new Date()
@@ -1499,7 +1498,7 @@ router.get('/withdrawal/threshold', verifyToken, async (req, res) => {
       message: "Withdrawal threshold retrieved successfully",
       data: {
         minimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
-        denominations: WITHDRAWAL_DENOMINATIONS,
+        denominations: settings.WithdrawalDenominations,
         dailyWithdrawalRequestLimit: settings.DailyWithdrawalRequestLimit,
         requestsToday: requestsToday,
         remainingRequestsToday: Math.max(0, settings.DailyWithdrawalRequestLimit - requestsToday),
@@ -1531,6 +1530,10 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
 
     const { Amount, PaymentMethod, UPIId, VirtualId, BankAccountNumber, BankIFSC, BankName, AccountHolderName } = req.body
 
+    // Get withdrawal settings
+    let withdrawalSettings = await withdrawalSettingsModel.getSettings()
+    const allowedDenominations = withdrawalSettings.WithdrawalDenominations || [10, 20, 30, 50]
+
     // Validate required fields
     if (Amount == null || Number(Amount) <= 0) {
       return res.status(400).json({
@@ -1539,9 +1542,9 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
     }
 
     const amountNum = Number(Amount)
-    if (!WITHDRAWAL_DENOMINATIONS.includes(amountNum)) {
+    if (!allowedDenominations.includes(amountNum)) {
       return res.status(400).json({
-        message: `Amount must be one of the allowed denominations: ${WITHDRAWAL_DENOMINATIONS.join(', ')}`
+        message: `Amount must be one of the allowed denominations: ${allowedDenominations.join(', ')}`
       })
     }
 
@@ -1550,9 +1553,6 @@ router.post('/withdrawal/request', verifyToken, async (req, res) => {
         message: "PaymentMethod is required and must be either 'UPI' or 'BankTransfer'"
       })
     }
-
-    // Get withdrawal settings
-    let withdrawalSettings = await withdrawalSettingsModel.getSettings()
 
     // Validate wallet balance
     const currentWalletBalance = user.WalletBalance || 0

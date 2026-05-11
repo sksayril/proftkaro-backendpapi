@@ -4915,14 +4915,22 @@ GET /users/ads/decision?taskType=ScratchCard&actionCount=4
 ## Withdrawal Daily Limit (User Side)
 
 ### GET /users/withdrawal/threshold (Updated)
-Now also returns daily withdrawal request limit information:
+Now also returns daily withdrawal request limit information and allowed denominations:
 - `dailyWithdrawalRequestLimit`
 - `requestsToday`
 - `remainingRequestsToday`
+- `denominations` — array of allowed withdrawal amounts (e.g. `[10, 20, 30, 50]`), configurable by admin
 - `canWithdraw` (wallet + daily limit dono consider karta hai)
 
 ### POST /users/withdrawal/request (Updated)
-Now enforces admin daily request limit (`1` or `2` per day).
+Now enforces admin daily request limit (`1` or `2` per day) and validates Amount against allowed denominations from DB.
+
+If invalid denomination:
+```json
+{
+  "message": "Amount must be one of the allowed denominations: 10, 20, 30, 50"
+}
+```
 
 If limit reached:
 ```json

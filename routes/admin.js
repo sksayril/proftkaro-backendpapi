@@ -2665,7 +2665,7 @@ router.get('/scratchcard/dailylimit/settings', verifyToken, async (req, res) => 
 // Set Withdrawal Threshold API
 router.post('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
   try {
-    const { MinimumWithdrawalAmount, DailyWithdrawalRequestLimit } = req.body
+    const { MinimumWithdrawalAmount, DailyWithdrawalRequestLimit, WithdrawalDenominations } = req.body
     
     if (MinimumWithdrawalAmount === undefined || MinimumWithdrawalAmount === null) {
       return res.status(400).json({
@@ -2691,6 +2691,19 @@ router.post('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
       })
     }
 
+    if (WithdrawalDenominations !== undefined) {
+      if (!Array.isArray(WithdrawalDenominations) || WithdrawalDenominations.length === 0) {
+        return res.status(400).json({
+          message: "WithdrawalDenominations must be a non-empty array of numbers"
+        })
+      }
+      if (!WithdrawalDenominations.every(d => typeof d === 'number' && d > 0)) {
+        return res.status(400).json({
+          message: "Each denomination must be a positive number"
+        })
+      }
+    }
+
     // Update or create settings
     let settings = await withdrawalSettingsModel.findOne()
     if (settings) {
@@ -2698,11 +2711,15 @@ router.post('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
       if (DailyWithdrawalRequestLimit !== undefined) {
         settings.DailyWithdrawalRequestLimit = DailyWithdrawalRequestLimit
       }
+      if (WithdrawalDenominations !== undefined) {
+        settings.WithdrawalDenominations = WithdrawalDenominations
+      }
       await settings.save()
     } else {
       settings = await withdrawalSettingsModel.create({
         MinimumWithdrawalAmount: MinimumWithdrawalAmount,
-        DailyWithdrawalRequestLimit: DailyWithdrawalRequestLimit !== undefined ? DailyWithdrawalRequestLimit : 1
+        DailyWithdrawalRequestLimit: DailyWithdrawalRequestLimit !== undefined ? DailyWithdrawalRequestLimit : 1,
+        WithdrawalDenominations: WithdrawalDenominations !== undefined ? WithdrawalDenominations : [10, 20, 30, 50]
       })
     }
 
@@ -2711,6 +2728,7 @@ router.post('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
       data: {
         MinimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
         DailyWithdrawalRequestLimit: settings.DailyWithdrawalRequestLimit,
+        WithdrawalDenominations: settings.WithdrawalDenominations,
         updatedAt: settings.updatedAt
       }
     })
@@ -2734,6 +2752,7 @@ router.get('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
       data: {
         MinimumWithdrawalAmount: settings.MinimumWithdrawalAmount,
         DailyWithdrawalRequestLimit: settings.DailyWithdrawalRequestLimit,
+        WithdrawalDenominations: settings.WithdrawalDenominations,
         updatedAt: settings.updatedAt
       }
     })
