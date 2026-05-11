@@ -2259,7 +2259,7 @@ Content-Type: application/json
 
 **Note:**
 - `MinimumWithdrawalAmount` (required): The minimum amount users must have in their wallet to make a withdrawal request (must be >= 1)
-- `DailyWithdrawalRequestLimit` (optional): Must be 1 or 2. Limits total daily withdrawal actions (UPI + Bank + Gift Voucher).
+- `DailyWithdrawalRequestLimit` (optional): Integer between 1 and 8. Limits total daily withdrawal actions per user (UPI + Bank + Gift Voucher).
 - `WithdrawalDenominations` (optional): Array of positive numbers. These are the fixed amounts users can choose when making a withdrawal request. Default: `[10, 20, 30, 50]`
 - This threshold is enforced when users submit withdrawal requests
 - Users can only withdraw one of the allowed denominations

@@ -2685,9 +2685,9 @@ router.post('/withdrawal/threshold', verifyAdminToken, async (req, res) => {
       })
     }
 
-    if (DailyWithdrawalRequestLimit !== undefined && ![1, 2].includes(DailyWithdrawalRequestLimit)) {
+    if (DailyWithdrawalRequestLimit !== undefined && (typeof DailyWithdrawalRequestLimit !== 'number' || DailyWithdrawalRequestLimit < 1 || DailyWithdrawalRequestLimit > 8 || !Number.isInteger(DailyWithdrawalRequestLimit))) {
       return res.status(400).json({
-        message: "DailyWithdrawalRequestLimit must be either 1 or 2"
+        message: "DailyWithdrawalRequestLimit must be an integer between 1 and 8"
       })
     }
 

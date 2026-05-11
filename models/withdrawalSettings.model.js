@@ -13,7 +13,8 @@ let schema = new mongoose.Schema({
         type: Number,
         required: true,
         default: 1,
-        enum: [1, 2]
+        min: 1,
+        max: 8
     },
     WithdrawalDenominations: {
         type: [Number],
@@ -38,7 +39,7 @@ schema.statics.getSettings = async function() {
     let needsSave = false
 
     // backward compatibility for existing settings docs
-    if (!settings.DailyWithdrawalRequestLimit || ![1, 2].includes(settings.DailyWithdrawalRequestLimit)) {
+    if (!settings.DailyWithdrawalRequestLimit || settings.DailyWithdrawalRequestLimit < 1 || settings.DailyWithdrawalRequestLimit > 8) {
         settings.DailyWithdrawalRequestLimit = 1
         needsSave = true
     }
