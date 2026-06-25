@@ -38,9 +38,9 @@ GET /refer?refer=VYD62W
 **How It Works:**
 1. Validates the referral code exists in the database
 2. Returns an HTML page with JavaScript that:
-   - Tries to open the Android app using Intent URL: `intent://refer?code=VYD62W#Intent;scheme=profitkaro;package=com.profitkaro;S.refer=VYD62W;end`
+   - Tries to open the Android app using Intent URL: `intent://refer?code=VYD62W#Intent;scheme=profitkaro;package=profitkaro.profitkaro;S.refer=VYD62W;end`
    - Falls back to custom scheme: `profitkaro://refer?code=VYD62W`
-   - Finally redirects to Play Store: `https://play.google.com/store/apps/details?id=com.profitkaro&referrer=VYD62W`
+   - Finally redirects to Play Store: `https://play.google.com/store/apps/details?id=profitkaro.profitkaro&referrer=VYD62W`
 
 **Success Response (200 OK):**
 Returns an HTML page that automatically redirects to the app or Play Store.
@@ -65,7 +65,7 @@ Returns an HTML page that automatically redirects to the app or Play Store.
   <body>
     <h1>Referral Code Not Found</h1>
     <p>The referral code "VYD62W" does not exist.</p>
-    <p><a href="https://play.google.com/store/apps/details?id=com.profitkaro">Download ProfitKaro App</a></p>
+    <p><a href="https://play.google.com/store/apps/details?id=profitkaro.profitkaro">Download ProfitKaro App</a></p>
   </body>
 </html>
 ```
@@ -76,7 +76,7 @@ Returns an HTML page that automatically redirects to the app or Play Store.
 - Works on Android devices (tries app first, then Play Store)
 - On iOS/Desktop, redirects directly to Play Store
 - The referral code is passed to the app via deep link parameters
-- App package name: `com.profitkaro`
+- App package name: `profitkaro.profitkaro`
 - Custom scheme: `profitkaro://`
 
 **Example Usage:**

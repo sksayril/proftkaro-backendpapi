@@ -32,7 +32,7 @@ router.get('/refer/:referCode', async (req, res) => {
           <body>
             <h1>Referral Code Not Found</h1>
             <p>The referral code "${referCode}" does not exist.</p>
-            <p><a href="https://play.google.com/store/apps/details?id=com.profitkaro">Download ProfitKaro App</a></p>
+            <p><a href="https://play.google.com/store/apps/details?id=profitkaro.profitkaro">Download ProfitKaro App</a></p>
           </body>
         </html>
       `)
@@ -40,7 +40,7 @@ router.get('/refer/:referCode', async (req, res) => {
 
     // Android Intent URL format for deep linking
     // This will try to open the app first, then fallback to Play Store
-    const appPackage = 'com.profitkaro'
+    const appPackage = 'profitkaro.profitkaro'
     const referCodeUpper = referCode.trim().toUpperCase()
     
     // Play Store URL with referrer parameter (properly formatted for install referrer)
@@ -244,7 +244,7 @@ router.get('/refer/:referCode', async (req, res) => {
         <body>
           <h1>Error</h1>
           <p>An error occurred while processing your referral link.</p>
-          <p><a href="https://play.google.com/store/apps/details?id=com.profitkaro">Download ProfitKaro App</a></p>
+          <p><a href="https://play.google.com/store/apps/details?id=profitkaro.profitkaro">Download ProfitKaro App</a></p>
         </body>
       </html>
     `)
